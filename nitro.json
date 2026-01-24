@@ -1,0 +1,19 @@
+{
+  "$schema": "https://nitro.margelo.com/nitro.schema.json",
+  "cxxNamespace": ["litertlm"],
+  "ios": {
+    "iosModuleName": "LiteRTLM",
+    "language": "c++"
+  },
+  "android": {
+    "androidNamespace": ["dev", "litert", "litertlm"],
+    "androidCxxLibName": "LiteRTLM",
+    "language": "kotlin"
+  },
+  "autolinking": {
+    "LiteRTLM": {
+      "kotlin": "HybridLiteRTLM"
+    }
+  },
+  "ignorePaths": ["**/node_modules"]
+}

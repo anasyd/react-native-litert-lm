@@ -1,0 +1,87 @@
+{
+  "name": "react-native-litert-lm",
+  "version": "0.1.0",
+  "description": "High-performance LLM inference for React Native using LiteRT-LM. Optimized for Gemma 3n and other on-device language models.",
+  "license": "MIT",
+  "author": "Hugh Chen (https://github.com/hung-yueh)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hung-yueh/react-native-litert-lm.git"
+  },
+  "homepage": "https://github.com/hung-yueh/react-native-litert-lm#readme",
+  "bugs": {
+    "url": "https://github.com/hung-yueh/react-native-litert-lm/issues"
+  },
+  "keywords": [
+    "react-native",
+    "nitro",
+    "litert",
+    "litert-lm",
+    "llm",
+    "gemma",
+    "gemma-3n",
+    "ai",
+    "machine-learning",
+    "on-device",
+    "inference",
+    "expo"
+  ],
+  "main": "lib/index",
+  "module": "lib/index",
+  "types": "lib/index.d.ts",
+  "react-native": "src/index",
+  "source": "src/index",
+  "files": [
+    "src",
+    "lib",
+    "android/src",
+    "android/build.gradle",
+    "android/CMakeLists.txt",
+    "ios",
+    "cpp",
+    "nitrogen/generated",
+    "react-native.config.js",
+    "react-native-litert-lm.podspec",
+    "app.plugin.js",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint \"**/*.{js,ts,tsx}\" --fix",
+    "prepack": "npm run build",
+    "specs": "npx nitrogen",
+    "clean": "rm -rf lib android/build ios/build nitrogen/generated",
+    "android": "expo run:android",
+    "android:clean": "cd android && ./gradlew clean",
+    "ios": "expo run:ios",
+    "release": "release-it"
+  },
+  "devDependencies": {
+    "@expo/config-plugins": "~54.0.4",
+    "@types/react": "~19.1.10",
+    "expo": "^54.0.31",
+    "nitrogen": "^0.33.2",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "release-it": "^19.2.4",
+    "typescript": "^5.0.0"
+  },
+  "peerDependencies": {
+    "expo": ">=54.0.0",
+    "react": "*",
+    "react-native": "*"
+  },
+  "peerDependenciesMeta": {
+    "expo": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "react-native-nitro-modules": "^0.33.2"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "git": {
+    "commitMessage": "chore: release ${version}",
+    "tagName": "v${version}",
+    "requireCleanWorkingDir": true
+  },
+  "github": {
+    "release": true
+  },
+  "npm": {
+    "publish": true
+  },
+  "hooks": {
+    "after:bump": "echo Updated package.json to ${version}"
+  }
+}
