@@ -9,8 +9,9 @@ High-performance LLM inference for React Native powered by [LiteRT-LM](https://g
 - ⚡ **GPU Acceleration** - GPU delegate (Android), Metal (iOS when available)
 - 📦 **Bundled Tokenizer** - No separate tokenization library needed
 - 🔄 **Streaming Support** - Token-by-token generation callbacks
-- 📱 **Cross-Platform** - Android API 26+ (iOS coming soon)
-- 🚧 **Multimodal** - Image and audio input (Coming Soon to Android)
+- 📱 **Cross-Platform** - Android API 26+
+- 🚧 **Multimodal** - Image and audio input (Coming Soon)
+- 🧵 **Async API** - Non-blocking inference to prevent UI freezes
 
 ## Status
 
@@ -86,15 +87,15 @@ import { createLLM } from "react-native-litert-lm";
 
 const llm = createLLM();
 
-// Load a Gemma 3n model
-llm.loadModel("/path/to/gemma-3n-e2b.litertlm", {
+// Load a Gemma 3n model (async)
+await llm.loadModel("/path/to/gemma-3n-e2b.litertlm", {
   backend: "gpu",
   temperature: 0.7,
   maxTokens: 512,
 });
 
-// Generate response
-const response = llm.sendMessage("What is the capital of France?");
+// Generate response (async)
+const response = await llm.sendMessage("What is the capital of France?");
 console.log(response);
 
 // Clean up
@@ -114,13 +115,15 @@ llm.sendMessageAsync("Tell me a story", (token, done) => {
 
 ```typescript
 // Image input (for vision models)
-const response = llm.sendMessageWithImage(
+// Note: Currently throws error on Android (Coming Soon)
+const response = await llm.sendMessageWithImage(
   "What's in this image?",
   "/path/to/image.jpg",
 );
 
 // Audio input (for audio models)
-const transcription = llm.sendMessageWithAudio(
+// Note: Currently throws error on Android (Coming Soon)
+const transcription = await llm.sendMessageWithAudio(
   "Transcribe this audio",
   "/path/to/audio.wav",
 );
@@ -152,7 +155,7 @@ Download `.litertlm` models from [HuggingFace](https://huggingface.co/litert-com
 
 Creates a new LLM inference engine instance.
 
-### `loadModel(path, config?)`
+### `loadModel(path, config?): Promise<void>`
 
 - `path: string` - Absolute path to `.litertlm` file
 - `config.backend` - `'cpu'` | `'gpu'` | `'npu'` (default: `'gpu'`)
@@ -172,19 +175,19 @@ Creates a new LLM inference engine instance.
 
 > ⚠️ **NPU Note**: NPU acceleration requires compatible hardware (Qualcomm Hexagon, MediaTek APU, etc.). If unavailable, LiteRT-LM automatically falls back to GPU.
 
-### `sendMessage(message): string`
+### `sendMessage(message): Promise<string>`
 
-Blocking generation. Returns complete response.
+Blocking generation (executed on background thread). Returns complete response.
 
 ### `sendMessageAsync(message, callback)`
 
 Streaming generation. Callback receives `(token, isDone)`.
 
-### `sendMessageWithImage(message, imagePath): string`
+### `sendMessageWithImage(message, imagePath): Promise<string>`
 
 Send a message with an image attachment (for vision models).
 
-### `sendMessageWithAudio(message, audioPath): string`
+### `sendMessageWithAudio(message, audioPath): Promise<string>`
 
 Send a message with an audio attachment (for audio models).
 
