@@ -10,7 +10,7 @@ High-performance LLM inference for React Native powered by [LiteRT-LM](https://g
 - 📦 **Bundled Tokenizer** - No separate tokenization library needed
 - 🔄 **Streaming Support** - Token-by-token generation callbacks
 - 📱 **Cross-Platform** - Android API 26+
-- 🚧 **Multimodal** - Image and audio input (Coming Soon)
+- 🖼️ **Multimodal** - Image and audio input support (Android Beta, iOS coming soon)
 - 🧵 **Async API** - Non-blocking inference to prevent UI freezes
 
 ## Status
@@ -114,15 +114,14 @@ llm.sendMessageAsync("Tell me a story", (token, done) => {
 ### Multimodal (Image/Audio)
 
 ```typescript
-// Image input (for vision models)
-// Note: Currently throws error on Android (Coming Soon)
+// Image input (for vision models like Gemma 3n)
+// ⚠️ Ensure model is loaded with { maxTokens: 1024+ }
 const response = await llm.sendMessageWithImage(
   "What's in this image?",
   "/path/to/image.jpg",
 );
 
 // Audio input (for audio models)
-// Note: Currently throws error on Android (Coming Soon)
 const transcription = await llm.sendMessageWithAudio(
   "Transcribe this audio",
   "/path/to/audio.wav",

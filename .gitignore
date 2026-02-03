@@ -3,6 +3,7 @@ node_modules/
 
 # Build outputs
 lib/
+build/
 *.tsbuildinfo
 
 # Native builds

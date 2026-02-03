@@ -20,8 +20,11 @@ import com.margelo.nitro.dev.litert.litertlm.LLMConfig
 import com.margelo.nitro.dev.litert.litertlm.Message
 import com.margelo.nitro.dev.litert.litertlm.Role
 import com.margelo.nitro.core.Promise
+import com.google.ai.edge.litertlm.Content
+
 
 // Alias to avoid confusion with our generated Message type
+// Alias to avoid confusion
 typealias LiteRTMessage = com.google.ai.edge.litertlm.Message
 
 /**
@@ -232,15 +235,60 @@ class HybridLiteRTLM : HybridLiteRTLMSpec() {
     // -------------------------------------------------------------------------
     override fun sendMessageWithImage(message: String, imagePath: String): Promise<String> {
         return Promise.parallel {
-             // TODO: Implement image loading from path
-            throw RuntimeException("Multimodal (Image) not yet implemented in this wrapper")
+            ensureLoaded()
+            Log.i(TAG, "sendMessageWithImage: $message, path=$imagePath")
+
+            // Create multimodal message
+            // Use factory method Message.of passing a list of Content
+            val textContent = Content.Text(message)
+            
+            val contentList = listOf(
+                textContent,
+                Content.ImageFile(imagePath)
+            )
+
+            val userMsg = LiteRTMessage.of(contentList)
+
+            // Add to history
+            history.add(Message(Role.USER, "$message [Image]"))
+
+            val responseMsg = conversation!!.sendMessage(userMsg)
+            
+            val response = responseMsg.contents
+                .filterIsInstance<Content.Text>()
+                .joinToString("") { it.text }
+
+            history.add(Message(Role.MODEL, response))
+            
+            response
         }
     }
 
     override fun sendMessageWithAudio(message: String, audioPath: String): Promise<String> {
         return Promise.parallel {
-            // TODO: Implement audio loading from path
-            throw RuntimeException("Multimodal (Audio) not yet implemented in this wrapper")
+            ensureLoaded()
+            Log.i(TAG, "sendMessageWithAudio: $message, path=$audioPath")
+
+            // Load audio
+            
+            val contentList = listOf(
+                Content.Text(message),
+                Content.AudioFile(audioPath)
+            )
+            
+            val userMsg = LiteRTMessage.of(contentList)
+
+            history.add(Message(Role.USER, "$message [Audio]"))
+            
+            val responseMsg = conversation!!.sendMessage(userMsg)
+            
+            val response = responseMsg.contents
+                .filterIsInstance<Content.Text>()
+                .joinToString("") { it.text }
+                
+            history.add(Message(Role.MODEL, response))
+            
+            response
         }
     }
 
@@ -290,4 +338,6 @@ class HybridLiteRTLM : HybridLiteRTLMSpec() {
         // Dispose old conversation if needed
         conversation = engine!!.createConversation()
     }
+
+
 }

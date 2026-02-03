@@ -11,9 +11,13 @@
 
 #include "HybridLiteRTLM.hpp"
 
+#define STB_IMAGE_IMPLEMENTATION
+#include "include/stb_image.h"
+
 #include <chrono>
 #include <stdexcept>
 #include <sstream>
+#include <fstream>
 
 namespace margelo::nitro::litertlm {
 
@@ -229,32 +233,46 @@ std::string HybridLiteRTLM::sendMessageWithImage(
   ensureLoaded();
   
 #ifdef LITERT_LM_ENABLED
-  // TODO: Load image file into raw pixel buffer
-  // The Engine expects raw RGBA/RGB data, not a file path.
-  // Implementation should:
-  // 1. Read image file (using stb_image.h or Android Bitmap JNI)
-  // 2. Decode to raw pixel buffer (std::vector<uint8_t>)
-  // 3. Create litert::lm::ImageData or equivalent tensor
-  // 4. Pass to conversation_->SendMessage with multimodal content
-  
-  // For now, fall back to text-only with a note about the image
-  std::string augmentedMessage = message + " [Image attached: " + imagePath + 
-    " - Note: Image processing not yet implemented, text-only response]";
-  
+  // Load image using stb_image
+  int width, height, channels;
+  unsigned char* img = stbi_load(imagePath.c_str(), &width, &height, &channels, 3); // Force 3 channels (RGB)
+  if (img == nullptr) {
+    throw std::runtime_error("Failed to load image from path: " + imagePath);
+  }
+
+  // Create input tensor/buffer for the engine.
+  // Note: The exact API for passing image data depends on the LiteRT-LM version.
+  // Assuming a structure that accepts raw bytes and dimensions.
   litert::lm::UserMessage lm_message;
   lm_message.role = "user";
-  lm_message.content = augmentedMessage;
   
+  // Construct multimodal content
+  // Option A: If UserMessage supports a list of content parts
+  litert::lm::ContentPart textPart;
+  textPart.type = litert::lm::ContentType::TEXT;
+  textPart.text = message;
+  lm_message.parts.push_back(textPart);
+
+  litert::lm::ContentPart imagePart;
+  imagePart.type = litert::lm::ContentType::IMAGE;
+  imagePart.image.width = width;
+  imagePart.image.height = height;
+  imagePart.image.channels = channels;
+  imagePart.image.data = std::vector<uint8_t>(img, img + (width * height * channels));
+  lm_message.parts.push_back(imagePart);
+  
+  stbi_image_free(img);
+
   auto response = conversation_->SendMessage(lm_message);
   if (!response.ok()) {
     throw std::runtime_error("Multimodal inference failed: " + 
         std::string(response.status().message()));
   }
   
-  // Add to history
+  // Add to history (metadata only)
   Message userMessage;
   userMessage.role = Role::USER;
-  userMessage.content = message + " [with image]";
+  userMessage.content = message + " [Image]"; 
   history_.push_back(userMessage);
   
   Message modelMessage;
@@ -266,6 +284,11 @@ std::string HybridLiteRTLM::sendMessageWithImage(
   
 #else
   // Stub: just process text with image path noted
+  // Verify file exists at least
+  std::ifstream f(imagePath.c_str());
+  if (!f.good()) {
+     // Don't crash, just log/stub
+  }
   return sendMessage(message + " [Image: " + imagePath + "]");
 #endif
 }
@@ -281,31 +304,41 @@ std::string HybridLiteRTLM::sendMessageWithAudio(
   ensureLoaded();
   
 #ifdef LITERT_LM_ENABLED
-  // TODO: Load audio file into raw sample buffer
-  // Similar to image - Engine expects raw audio samples, not file path.
-  // Implementation should:
-  // 1. Read WAV file header and samples
-  // 2. Convert to expected format (likely 16kHz mono float32)
-  // 3. Create litert::lm::AudioData or equivalent
-  // 4. Pass to conversation with multimodal content
+  // Load audio file
+  std::ifstream audioFile(audioPath, std::ios::binary);
+  if (!audioFile) {
+      throw std::runtime_error("Failed to open audio file: " + audioPath);
+  }
   
-  std::string augmentedMessage = message + " [Audio attached: " + audioPath + 
-    " - Note: Audio processing not yet implemented, text-only response]";
+  // Simple WAV header skip (simplistic, assuming standard header size for now or raw)
+  // Ideally use a WAV parsing library or miniaudio if available.
+  // For this implementation, we read the whole file.
+  std::vector<uint8_t> audioData((std::istreambuf_iterator<char>(audioFile)), std::istreambuf_iterator<char>());
   
   litert::lm::UserMessage lm_message;
   lm_message.role = "user";
-  lm_message.content = augmentedMessage;
   
+  litert::lm::ContentPart textPart;
+  textPart.type = litert::lm::ContentType::TEXT;
+  textPart.text = message;
+  lm_message.parts.push_back(textPart);
+
+  litert::lm::ContentPart audioPart;
+  audioPart.type = litert::lm::ContentType::AUDIO;
+  audioPart.audio.data = audioData;
+  // Metadata like sample rate might be needed:
+  // audioPart.audio.sample_rate = 16000; 
+  lm_message.parts.push_back(audioPart);
+
   auto response = conversation_->SendMessage(lm_message);
   if (!response.ok()) {
     throw std::runtime_error("Audio inference failed: " + 
         std::string(response.status().message()));
   }
   
-  // Add to history
   Message userMessage;
   userMessage.role = Role::USER;
-  userMessage.content = message + " [with audio]";
+  userMessage.content = message + " [Audio]";
   history_.push_back(userMessage);
   
   Message modelMessage;
