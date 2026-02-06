@@ -233,10 +233,54 @@ class HybridLiteRTLM : HybridLiteRTLMSpec() {
     // -------------------------------------------------------------------------
     // Multimodal methods
     // -------------------------------------------------------------------------
+    
+    /**
+     * Resize image if dimensions exceed maxDimension to prevent OOM.
+     * Gemma 3n's vision encoder is optimized for 512x512 or 1024x1024.
+     * Passing larger images can spike memory 500MB+.
+     */
+    private fun resizeImageIfNeeded(imagePath: String, maxDimension: Int = 1024): String {
+        val originalBitmap = android.graphics.BitmapFactory.decodeFile(imagePath)
+            ?: throw RuntimeException("Failed to decode image: $imagePath")
+
+        val width = originalBitmap.width
+        val height = originalBitmap.height
+
+        // If already within bounds, return original path
+        if (width <= maxDimension && height <= maxDimension) {
+            originalBitmap.recycle()
+            return imagePath
+        }
+
+        Log.i(TAG, "Resizing image from ${width}x${height} to fit ${maxDimension}px")
+
+        val scale = maxDimension.toFloat() / maxOf(width, height)
+        val newWidth = (width * scale).toInt()
+        val newHeight = (height * scale).toInt()
+
+        val resizedBitmap = android.graphics.Bitmap.createScaledBitmap(originalBitmap, newWidth, newHeight, true)
+        originalBitmap.recycle()
+
+        // Save to temp file
+        val cacheDir = LiteRTLMInitProvider.applicationContext?.cacheDir
+            ?: throw RuntimeException("Application context not available for image resizing")
+        val tempFile = java.io.File(cacheDir, "resized_${System.currentTimeMillis()}.jpg")
+        java.io.FileOutputStream(tempFile).use { out ->
+            resizedBitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, out)
+        }
+        resizedBitmap.recycle()
+
+        Log.i(TAG, "Resized image saved to: ${tempFile.absolutePath} (${newWidth}x${newHeight})")
+        return tempFile.absolutePath
+    }
+
     override fun sendMessageWithImage(message: String, imagePath: String): Promise<String> {
         return Promise.parallel {
             ensureLoaded()
             Log.i(TAG, "sendMessageWithImage: $message, path=$imagePath")
+
+            // Resize image to prevent OOM on high-resolution photos
+            val processedImagePath = resizeImageIfNeeded(imagePath)
 
             // Create multimodal message
             // Use factory method Message.of passing a list of Content
@@ -244,7 +288,7 @@ class HybridLiteRTLM : HybridLiteRTLMSpec() {
             
             val contentList = listOf(
                 textContent,
-                Content.ImageFile(imagePath)
+                Content.ImageFile(processedImagePath)
             )
 
             val userMsg = LiteRTMessage.of(contentList)
@@ -263,6 +307,7 @@ class HybridLiteRTLM : HybridLiteRTLMSpec() {
             response
         }
     }
+
 
     override fun sendMessageWithAudio(message: String, audioPath: String): Promise<String> {
         return Promise.parallel {
