@@ -22,6 +22,13 @@ export type Role = "user" | "model" | "system";
  */
 export interface LLMConfig {
   /**
+   * System prompt to set the model's behavior.
+   * This is prepended to the conversation to guide model responses.
+   * @example "You are a helpful coding assistant."
+   */
+  systemPrompt?: string;
+
+  /**
    * Primary compute backend for text generation.
    * - 'cpu': CPU inference (slower but always available)
    * - 'gpu': GPU acceleration (fast, recommended)

@@ -18,6 +18,14 @@ export type {
   GenerationStats,
 } from "./specs/LiteRTLM.nitro";
 
+// Re-export template utilities
+export type { ChatMessage } from "./templates";
+export {
+  applyGemmaTemplate,
+  applyPhiTemplate,
+  applyLlamaTemplate,
+} from "./templates";
+
 /**
  * Creates a new LiteRT-LM inference engine instance.
  *
@@ -121,5 +129,29 @@ export function checkBackendSupport(backend: Backend): string | undefined {
     return "LiteRT-LM iOS is not yet released. Only CPU backend may work via fallback.";
   }
 
+  return undefined;
+}
+
+/**
+ * Check if multimodal features (image/audio) are supported on the current platform.
+ * Returns an error message if not supported, undefined if OK.
+ *
+ * @returns Error message if multimodal is not supported, undefined if OK
+ *
+ * @example
+ * ```typescript
+ * const error = checkMultimodalSupport();
+ * if (error) {
+ *   console.warn(error);
+ *   // Fall back to text-only
+ * } else {
+ *   llm.sendMessageWithImage('Describe this', imagePath);
+ * }
+ * ```
+ */
+export function checkMultimodalSupport(): string | undefined {
+  if (Platform.OS === "ios") {
+    return "Multimodal (image/audio) is not yet supported on iOS. LiteRT-LM iOS SDK is pending.";
+  }
   return undefined;
 }

@@ -90,6 +90,7 @@ const llm = createLLM();
 // Load a Gemma 3n model (async)
 await llm.loadModel("/path/to/gemma-3n-e2b.litertlm", {
   backend: "gpu",
+  systemPrompt: "You are a helpful assistant.", // Optional
   temperature: 0.7,
   maxTokens: 512,
 });
@@ -114,18 +115,26 @@ llm.sendMessageAsync("Tell me a story", (token, done) => {
 ### Multimodal (Image/Audio)
 
 ```typescript
-// Image input (for vision models like Gemma 3n)
-// ⚠️ Ensure model is loaded with { maxTokens: 1024+ }
-const response = await llm.sendMessageWithImage(
-  "What's in this image?",
-  "/path/to/image.jpg",
-);
+import { checkMultimodalSupport } from "react-native-litert-lm";
 
-// Audio input (for audio models)
-const transcription = await llm.sendMessageWithAudio(
-  "Transcribe this audio",
-  "/path/to/audio.wav",
-);
+// Check platform support first
+const error = checkMultimodalSupport();
+if (error) {
+  console.warn(error); // iOS not yet supported
+} else {
+  // Image input (for vision models like Gemma 3n)
+  // Images >1024px are automatically resized to prevent OOM
+  const response = await llm.sendMessageWithImage(
+    "What's in this image?",
+    "/path/to/image.jpg",
+  );
+
+  // Audio input (for audio models)
+  const transcription = await llm.sendMessageWithAudio(
+    "Transcribe this audio",
+    "/path/to/audio.wav",
+  );
+}
 ```
 
 ### Check Performance
@@ -157,6 +166,7 @@ Creates a new LLM inference engine instance.
 ### `loadModel(path, config?): Promise<void>`
 
 - `path: string` - Absolute path to `.litertlm` file
+- `config.systemPrompt` - System prompt to guide model behavior (e.g., "You are a helpful assistant.")
 - `config.backend` - `'cpu'` | `'gpu'` | `'npu'` (default: `'gpu'`)
 - `config.temperature` - Sampling temperature (default: 0.7)
 - `config.topK` - Top-K sampling (default: 40)
@@ -217,6 +227,47 @@ const warning = checkBackendSupport("npu");
 if (warning) {
   console.warn(warning);
 }
+```
+
+### `checkMultimodalSupport(): string | undefined`
+
+Returns an error message if multimodal (image/audio) is not supported on the current platform, or `undefined` if OK.
+
+```typescript
+import { checkMultimodalSupport } from "react-native-litert-lm";
+
+const error = checkMultimodalSupport();
+if (error) {
+  console.warn(error); // iOS multimodal not yet supported
+}
+```
+
+### Prompt Templates
+
+For advanced use cases where you need to manually format prompts:
+
+```typescript
+import {
+  applyGemmaTemplate,
+  applyPhiTemplate,
+  applyLlamaTemplate,
+  ChatMessage,
+} from "react-native-litert-lm";
+
+const history: ChatMessage[] = [
+  { role: "user", content: "Hello!" },
+  { role: "model", content: "Hi there!" },
+  { role: "user", content: "Tell me a joke" },
+];
+
+// For Gemma models
+const gemmaPrompt = applyGemmaTemplate(history, "You are a comedian.");
+
+// For Phi models
+const phiPrompt = applyPhiTemplate(history);
+
+// For Llama models
+const llamaPrompt = applyLlamaTemplate(history, "You are helpful.");
 ```
 
 ## Requirements
