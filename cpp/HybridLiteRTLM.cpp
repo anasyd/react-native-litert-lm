@@ -291,6 +291,26 @@ std::string HybridLiteRTLM::sendMessageWithImage(
 #endif
 }
 
+#endif
+}
+
+//------------------------------------------------------------------------------
+// downloadModel - Download model file from URL
+//------------------------------------------------------------------------------
+std::future<std::string> HybridLiteRTLM::downloadModel(
+    const std::string& url,
+    const std::string& fileName,
+    const std::optional<std::function<void(double)>>& onProgress) {
+  
+  // Return a future that throws an exception
+  return std::async(std::launch::async, []() -> std::string {
+    throw std::runtime_error(
+        "downloadModel is not supported on iOS yet. "
+        "Please download the model manually using a separate library."
+    );
+  });
+}
+
 //------------------------------------------------------------------------------
 // sendMessageWithAudio - Multimodal audio + text
 //------------------------------------------------------------------------------

@@ -54,13 +54,40 @@ cd android && ./gradlew clean
 cd ios && pod install  # iOS coming soon
 ```
 
+## Example App
+
+The repository includes a fully functional example app in the `example/` directory.
+
+To run it:
+
+1.  **Navigate to the example directory:**
+
+    ```bash
+    cd example
+    ```
+
+2.  **Install dependencies:**
+
+    ```bash
+    npm install
+    ```
+
+3.  **Run on Android:**
+    ```bash
+    npx expo run:android
+    ```
+
 ## Model Management
 
 LiteRT-LM models (like Gemma 3n) are large files (3GB+) and cannot be bundled directly into your app's binary. You must download them at runtime to a writable directory (e.g., `DocumentDirectory`).
 
-### Downloading Models
+### Automatic Downloading
 
-We recommend using `rn-fetch-blob` or `expo-file-system` to download models.
+The library supports automatic downloading when you pass a URL to `loadModel` or `useModel`.
+
+### Manual Downloading (Optional)
+
+If you prefer to manage downloads manually (e.g., using `rn-fetch-blob` or `expo-file-system`), you can download the file to a local path and pass that path to the library.
 
 ```typescript
 import { FileSystem } from "react-native-file-access";
@@ -80,19 +107,53 @@ async function downloadModel() {
 
 ## Usage
 
-### Basic Generation
+### React Hook (Recommended)
+
+The `useModel` hook manages the model lifecycle, including downloading, loading, and unloading.
+
+```typescript
+import { useModel, GEMMA_3N_E2B_IT_INT4 } from "react-native-litert-lm";
+
+function App() {
+  const {
+    model,
+    isReady,
+    downloadProgress,
+    load,   // Manually trigger load
+    deleteModel // Delete model file
+  } = useModel(
+    GEMMA_3N_E2B_IT_INT4,
+    {
+      backend: "cpu",
+      autoLoad: true, // Default: true. Set false to load manually.
+      systemPrompt: "You are a helpful assistant."
+    }
+  );
+
+  if (!isReady) {
+    return <Text>Loading... {Math.round(downloadProgress * 100)}%</Text>;
+  }
+
+  const generate = async () => {
+    const response = await model.sendMessage("Hello!");
+    console.log(response);
+  };
+
+  return <Button title="Generate" onPress={generate} />;
+}
+```
+
+### Manual Usage
 
 ```typescript
 import { createLLM } from "react-native-litert-lm";
 
 const llm = createLLM();
 
-// Load a Gemma 3n model (async)
-await llm.loadModel("/path/to/gemma-3n-e2b.litertlm", {
+// Load a model from URL (auto-downloads) or local path
+await llm.loadModel("https://example.com/model.litertlm", {
   backend: "gpu",
-  systemPrompt: "You are a helpful assistant.", // Optional
-  temperature: 0.7,
-  maxTokens: 512,
+  systemPrompt: "You are a helpful assistant.",
 });
 
 // Generate response (async)
@@ -147,15 +208,18 @@ console.log(`Speed: ${stats.tokensPerSecond.toFixed(1)} tokens/sec`);
 
 ## Supported Models
 
-Download `.litertlm` models from [HuggingFace](https://huggingface.co/litert-community):
+Download `.litertlm` models automatically using the exported constants or from [HuggingFace](https://huggingface.co/litert-community):
 
-| Model         | Size   | Min Device RAM | Use Case                  |
-| ------------- | ------ | -------------- | ------------------------- |
-| Gemma 3n E2B  | ~3GB   | 4GB+           | Efficient, fast responses |
-| Gemma 3n E4B  | ~4GB   | 8GB+           | Higher quality            |
-| Gemma 3 1B    | ~1GB   | 4GB+           | Smallest, fastest         |
-| Phi-4 Mini    | ~2GB   | 4GB+           | Microsoft's small LLM     |
-| Qwen 2.5 1.5B | ~1.5GB | 4GB+           | Multilingual              |
+| Model Constant         | Description                            | Size | Min Device RAM |
+| :--------------------- | :------------------------------------- | :--- | :------------- |
+| `GEMMA_3N_E2B_IT_INT4` | Gemma 3n E2B (Instruction Tuned, Int4) | ~3GB | 4GB+           |
+
+| Other Models  | Size   | Min Device RAM | Use Case              |
+| ------------- | ------ | -------------- | --------------------- |
+| Gemma 3n E4B  | ~4GB   | 8GB+           | Higher quality        |
+| Gemma 3 1B    | ~1GB   | 4GB+           | Smallest, fastest     |
+| Phi-4 Mini    | ~2GB   | 4GB+           | Microsoft's small LLM |
+| Qwen 2.5 1.5B | ~1.5GB | 4GB+           | Multilingual          |
 
 ## API Reference
 
@@ -165,7 +229,7 @@ Creates a new LLM inference engine instance.
 
 ### `loadModel(path, config?): Promise<void>`
 
-- `path: string` - Absolute path to `.litertlm` file
+- `path: string` - Absolute path to `.litertlm` file OR a public URL (http/https). If a URL is provided, the model will be downloaded automatically.
 - `config.systemPrompt` - System prompt to guide model behavior (e.g., "You are a helpful assistant.")
 - `config.backend` - `'cpu'` | `'gpu'` | `'npu'` (default: `'gpu'`)
 - `config.temperature` - Sampling temperature (default: 0.7)
@@ -211,6 +275,10 @@ Clear context and start fresh.
 ### `close()`
 
 Release all native resources.
+
+### `deleteModel(fileName): Promise<void>`
+
+Deletes a model file from the app's internal storage and cleans up the engine instance.
 
 ### `getRecommendedBackend(): Backend`
 

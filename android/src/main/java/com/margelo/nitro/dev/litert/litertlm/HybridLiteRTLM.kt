@@ -37,6 +37,20 @@ class HybridLiteRTLM : HybridLiteRTLMSpec() {
 
     companion object {
         private const val TAG = "HybridLiteRTLM"
+        private val initLock = Any()
+        
+        /**
+         * Initialize the native library.
+         * Must be called from Application.onCreate() to register the HybridObject.
+         */
+        fun initialize() {
+            try {
+                // Call generated internal OnLoad to load the library
+                LiteRTLMOnLoad.initializeNative()
+            } catch (e: Throwable) {
+                Log.e(TAG, "Failed to initialize LiteRTLM native library", e)
+            }
+        }
     }
 
     init {
@@ -46,6 +60,9 @@ class HybridLiteRTLM : HybridLiteRTLMSpec() {
     // LiteRT-LM Engine and Conversation
     private var engine: Engine? = null
     private var conversation: Conversation? = null
+    
+    @Volatile
+    private var isClosed = false
 
     // Conversation history for getHistory()
     private val history = mutableListOf<Message>()
@@ -75,64 +92,74 @@ class HybridLiteRTLM : HybridLiteRTLMSpec() {
     // -------------------------------------------------------------------------
     override fun loadModel(modelPath: String, config: LLMConfig?): Promise<Unit> {
         return Promise.parallel {
-            Log.i(TAG, "loadModel: $modelPath")
-
-            // Clean up existing resources
-            close()
-
-            // Apply configuration
-            config?.let { cfg ->
-                cfg.backend?.let { backend = it }
-                cfg.temperature?.let { temperature = it }
-                cfg.topK?.let { topK = it.toInt() }
-                cfg.topP?.let { topP = it }
-                cfg.maxTokens?.let { maxTokens = it.toInt() }
-            }
-
-            try {
-                // Map our Backend enum to LiteRT-LM Backend enum
-                val lmBackend = when (backend) {
-                    Backend.GPU -> com.google.ai.edge.litertlm.Backend.GPU
-                    Backend.NPU -> {
-                        Log.i(TAG, "NPU backend requested - requires hardware support")
-                        com.google.ai.edge.litertlm.Backend.NPU
-                    }
-                    else -> com.google.ai.edge.litertlm.Backend.CPU
+            // Serialize initialization to prevent OOM from concurrent loads
+            synchronized(initLock) {
+                if (isClosed) {
+                    throw RuntimeException("Cannot load model: LiteRTLM instance is closed")
                 }
                 
-                // Vision backend: hardcoded to GPU (required by Gemma 3n)
-                val lmVisionBackend = com.google.ai.edge.litertlm.Backend.GPU
+                Log.i(TAG, "loadModel: $modelPath")
+    
+                // Clean up existing resources
+                // We call internal cleanup that doesn't set isClosed
+                cleanupInternal()
+    
+                // Apply configuration
+                config?.let { cfg ->
+                    cfg.backend?.let { backend = it }
+                    cfg.temperature?.let { temperature = it }
+                    cfg.topK?.let { topK = it.toInt() }
+                    cfg.topP?.let { topP = it }
+                    cfg.maxTokens?.let { maxTokens = it.toInt() }
+                }
+    
+                try {
+                    // Map our Backend enum to LiteRT-LM Backend enum
+                    val lmBackend = when (backend) {
+                        Backend.GPU -> com.google.ai.edge.litertlm.Backend.GPU
+                        Backend.NPU -> {
+                            Log.i(TAG, "NPU backend requested - requires hardware support")
+                            com.google.ai.edge.litertlm.Backend.NPU
+                        }
+                        else -> com.google.ai.edge.litertlm.Backend.CPU
+                    }
                     
-                // Audio backend: hardcoded to CPU (optimal for audio processing)
-                val lmAudioBackend = com.google.ai.edge.litertlm.Backend.CPU
-
-                Log.i(TAG, "Backend config: main=$lmBackend, vision=$lmVisionBackend (hardcoded), audio=$lmAudioBackend (hardcoded)")
-
-                // Get cache directory from application context
-                val cacheDirectory = LiteRTLMInitProvider.applicationContext?.cacheDir?.absolutePath
-                Log.i(TAG, "Using cache directory: $cacheDirectory")
-
-                // Create Engine configuration
-                val engineConfig = EngineConfig(
-                    modelPath = modelPath,
-                    backend = lmBackend,
-                    visionBackend = lmVisionBackend,
-                    audioBackend = lmAudioBackend,
-                    maxNumTokens = maxTokens,
-                    cacheDir = cacheDirectory
-                )
-
-                // Initialize Engine
-                engine = Engine(engineConfig).also { it.initialize() }
-                Log.i(TAG, "Engine created and initialized successfully")
-
-                // Create Conversation
-                createNewConversation()
-                Log.i(TAG, "Conversation created successfully")
-
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to load model: ${e.message}", e)
-                throw RuntimeException("Failed to load model: ${e.message}", e)
+                    // Vision backend: hardcoded to GPU (required by Gemma 3n)
+                    val lmVisionBackend = com.google.ai.edge.litertlm.Backend.GPU
+                        
+                    // Audio backend: hardcoded to CPU (optimal for audio processing)
+                    val lmAudioBackend = com.google.ai.edge.litertlm.Backend.CPU
+    
+                    Log.i(TAG, "Backend config: main=$lmBackend, vision=$lmVisionBackend (hardcoded), audio=$lmAudioBackend (hardcoded)")
+    
+                    // Get cache directory from application context
+                    val cacheDirectory = LiteRTLMInitProvider.applicationContext?.cacheDir?.absolutePath
+                    Log.i(TAG, "Using cache directory: $cacheDirectory")
+    
+                    // Create Engine configuration
+                    val engineConfig = EngineConfig(
+                        modelPath = modelPath,
+                        backend = lmBackend,
+                        visionBackend = lmVisionBackend,
+                        audioBackend = lmAudioBackend,
+                        maxNumTokens = maxTokens,
+                        cacheDir = cacheDirectory
+                    )
+    
+                    if (isClosed) return@synchronized
+                    
+                    // Initialize Engine
+                    engine = Engine(engineConfig).also { it.initialize() }
+                    Log.i(TAG, "Engine created and initialized successfully")
+    
+                    // Create Conversation
+                    createNewConversation()
+                    Log.i(TAG, "Conversation created successfully")
+    
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to load model: ${e.message}", e)
+                    throw RuntimeException("Failed to load model: ${e.message}", e)
+                }
             }
         }
     }
@@ -308,6 +335,114 @@ class HybridLiteRTLM : HybridLiteRTLMSpec() {
         }
     }
 
+    override fun downloadModel(url: String, fileName: String, onProgress: ((Double) -> Unit)?): Promise<String> {
+        return Promise.parallel {
+            Log.i(TAG, "downloadModel: $url -> $fileName")
+            
+            val context = LiteRTLMInitProvider.applicationContext ?: throw RuntimeException("Context not available")
+            val modelsDir = java.io.File(context.filesDir, "models")
+            if (!modelsDir.exists()) {
+                modelsDir.mkdirs()
+            }
+            
+            val modelFile = java.io.File(modelsDir, fileName)
+            val tempFile = java.io.File(modelsDir, "$fileName.tmp")
+            
+            // Check if file exists and has content
+            if (modelFile.exists() && modelFile.length() > 0) {
+                Log.i(TAG, "Model already exists at: ${modelFile.absolutePath}")
+                onProgress?.invoke(1.0)
+                return@parallel modelFile.absolutePath
+            }
+            
+            Log.i(TAG, "Downloading model to temp file: ${tempFile.absolutePath}")
+            onProgress?.invoke(0.0)
+            
+            try {
+                val connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                connection.connectTimeout = 15000 // 15s
+                connection.readTimeout = 0 // Infinite for large files
+                connection.doInput = true
+                connection.connect()
+                
+                if (connection.responseCode != java.net.HttpURLConnection.HTTP_OK) {
+                    throw RuntimeException("Failed to download model: HTTP ${connection.responseCode}")
+                }
+                
+                val contentLength = connection.contentLengthLong // Use long for large files
+                val input = connection.inputStream
+                val output = java.io.FileOutputStream(tempFile)
+                
+                val buffer = ByteArray(8 * 1024)
+                var bytesRead: Int
+                var totalBytesRead = 0L
+                var lastProgressUpdate = 0L
+                
+                while (input.read(buffer).also { bytesRead = it } != -1) {
+                    output.write(buffer, 0, bytesRead)
+                    totalBytesRead += bytesRead
+                    
+                    if (contentLength > 0 && onProgress != null) {
+                        val currentTime = System.currentTimeMillis()
+                        // Update roughly every 100ms to avoid flooding JS bridge
+                        if (currentTime - lastProgressUpdate > 100) {
+                            val progress = totalBytesRead.toDouble() / contentLength.toDouble()
+                            onProgress(progress)
+                            lastProgressUpdate = currentTime
+                        }
+                    }
+                }
+                
+                output.flush()
+                output.close()
+                input.close()
+                connection.disconnect()
+                
+                // Atomic rename
+                if (tempFile.renameTo(modelFile)) {
+                    Log.i(TAG, "Download complete and renamed to: ${modelFile.absolutePath}")
+                    onProgress?.invoke(1.0)
+                    return@parallel modelFile.absolutePath
+                } else {
+                    throw RuntimeException("Failed to rename temp file to model file")
+                }
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "Download failed", e)
+                if (tempFile.exists()) {
+                    tempFile.delete()
+                }
+                throw RuntimeException("Download failed: ${e.message}", e)
+            }
+        }
+    }
+
+    override fun deleteModel(fileName: String): Promise<Unit> {
+        return Promise.parallel {
+            Log.i(TAG, "deleteModel: $fileName")
+            val context = LiteRTLMInitProvider.applicationContext ?: throw RuntimeException("Context not available")
+            val modelsDir = java.io.File(context.filesDir, "models")
+            val modelFile = java.io.File(modelsDir, fileName)
+            
+            if (modelFile.exists()) {
+                val deleted = modelFile.delete()
+                if (deleted) {
+                    Log.i(TAG, "Deleted model: ${modelFile.absolutePath}")
+                    // Ensure engine references are cleared if they point to this file
+                    // We use cleanupInternal() which releases resources WITHOUT marking the instance as closed.
+                    if (engine != null) {
+                        Log.i(TAG, "Cleaning up engine after deleting model file.")
+                        cleanupInternal()
+                    }
+                } else {
+                    Log.e(TAG, "Failed to delete model: ${modelFile.absolutePath}")
+                    throw RuntimeException("Failed to delete model: ${modelFile.absolutePath}")
+                }
+            } else {
+                Log.w(TAG, "Model not found for deletion: ${modelFile.absolutePath}")
+            }
+        }
+    }
 
     override fun sendMessageWithAudio(message: String, audioPath: String): Promise<String> {
         return Promise.parallel {
@@ -363,10 +498,26 @@ class HybridLiteRTLM : HybridLiteRTLMSpec() {
 
     override fun close() {
         Log.d(TAG, "Closing resources")
+        isClosed = true
+        cleanupInternal()
+    }
+
+    private fun cleanupInternal() {
         try {
             conversation = null
-            engine = null // Engine destructor should handle cleanup
-            // In C++ we'd close explicitly, Kotlin GC helps but explicit close method is better if SDK has it
+            // Explicitly close engine if it supports it to free native memory immediately
+            // Assuming Engine implements AutoCloseable or has close()
+            if (engine is AutoCloseable) {
+                (engine as AutoCloseable).close()
+            } else {
+                 // Try reflection or just null it if no close method
+                try {
+                    engine?.javaClass?.getMethod("close")?.invoke(engine)
+                } catch (e: Exception) {
+                    // Method not found, rely on GC
+                }
+            }
+            engine = null 
         } catch (e: Exception) {
             Log.e(TAG, "Error closing resources", e)
         }

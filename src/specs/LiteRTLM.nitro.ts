@@ -146,6 +146,25 @@ export interface LiteRTLM extends HybridObject<{
   sendMessageWithImage(message: string, imagePath: string): Promise<string>;
 
   /**
+   * Download a model file from a URL.
+   * @param url URL to download from.
+   * @param fileName Filename to save as (in app's files directory).
+   * @param onProgress Callback for download progress (0.0 - 1.0).
+   * @returns Absolute path to the downloaded file.
+   */
+  downloadModel(
+    url: string,
+    fileName: string,
+    onProgress?: (progress: number) => void,
+  ): Promise<string>;
+
+  /**
+   * Delete a downloaded model file.
+   * @param fileName Filename to delete (in app's files directory).
+   */
+  deleteModel(fileName: string): Promise<void>;
+
+  /**
    * Send a text message with audio (multimodal).
    * @param message User message text.
    * @param audioPath Absolute path to an audio file (WAV).

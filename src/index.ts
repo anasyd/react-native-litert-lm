@@ -26,6 +26,8 @@ export {
   applyLlamaTemplate,
 } from "./templates";
 
+export * from "./hooks";
+
 /**
  * Creates a new LiteRT-LM inference engine instance.
  *
@@ -59,9 +61,7 @@ export {
  * llm.close();
  * ```
  */
-export function createLLM(): LiteRTLM {
-  return NitroModules.createHybridObject<LiteRTLM>("LiteRTLM");
-}
+export { createLLM } from "./modelFactory";
 
 /**
  * Pre-defined model identifiers for common models.
@@ -155,3 +155,9 @@ export function checkMultimodalSupport(): string | undefined {
   }
   return undefined;
 }
+
+/**
+ * Download URL for the Gemma 3n E2B IT INT4 model.
+ */
+export const GEMMA_3N_E2B_IT_INT4 =
+  "https://litert.dev/gemma-3n-E2B-it-int4.litertlm";

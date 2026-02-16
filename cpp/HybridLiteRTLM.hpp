@@ -58,6 +58,10 @@ public:
   
   std::string sendMessageWithImage(const std::string& message,
                                    const std::string& imagePath) override;
+
+  std::future<std::string> downloadModel(const std::string& url, 
+                                         const std::string& fileName,
+                                         const std::optional<std::function<void(double)>>& onProgress) override;
   
   std::string sendMessageWithAudio(const std::string& message,
                                    const std::string& audioPath) override;
