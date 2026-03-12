@@ -28,7 +28,7 @@ export {
   applyLlamaTemplate,
 } from "./templates";
 
-// Re-export memory tracking utilities (uses NitroModules.createNativeArrayBuffer v0.34+)
+// Re-export memory tracking utilities (uses NitroModules.createNativeArrayBuffer v0.35+)
 export type {
   MemorySnapshot,
   MemoryTracker,

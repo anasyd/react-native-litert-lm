@@ -6,7 +6,7 @@ import type { MemoryTracker, MemoryTrackerSummary } from "./memoryTracker";
 export interface UseModelConfig extends LLMConfig {
   autoLoad?: boolean;
   /**
-   * Enable memory tracking using native ArrayBuffers (v0.34+).
+   * Enable memory tracking using native ArrayBuffers (v0.35+).
    * When enabled, memory usage is tracked after each inference call
    * using `NitroModules.createNativeArrayBuffer()` for zero-copy storage.
    * @default false

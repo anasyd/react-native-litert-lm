@@ -6,7 +6,7 @@ import { createMemoryTracker, MemoryTracker } from "./memoryTracker";
  * Creates a new LiteRT-LM inference engine instance.
  *
  * Optionally creates a native-backed memory tracker using
- * `NitroModules.createNativeArrayBuffer()` (v0.34+) for efficient
+ * `NitroModules.createNativeArrayBuffer()` (v0.35+) for efficient
  * zero-copy memory usage tracking.
  *
  * @param options.enableMemoryTracking Enable automatic memory tracking (default: false)

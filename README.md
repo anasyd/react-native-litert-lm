@@ -13,7 +13,7 @@ High-performance LLM inference for React Native powered by [LiteRT-LM](https://g
 - 🖼️ **Multimodal** - Image and audio input support (Android Beta, iOS coming soon)
 - 🧵 **Async API** - Non-blocking inference to prevent UI freezes
 - 📊 **Real Memory Tracking** - OS-level memory metrics (RSS, native heap, available memory) via native APIs
-- 🧮 **Zero-Copy Buffers** - Memory snapshots stored in native ArrayBuffers via `NitroModules.createNativeArrayBuffer()` (v0.34+)
+- 🧮 **Zero-Copy Buffers** - Memory snapshots stored in native ArrayBuffers via `NitroModules.createNativeArrayBuffer()` (v0.35+)
 
 ## Status
 
@@ -438,7 +438,7 @@ const llamaPrompt = applyLlamaTemplate(history, "You are helpful.");
 ## Requirements
 
 - React Native 0.76+
-- react-native-nitro-modules **0.34.1+** (required for `createNativeArrayBuffer` and memory tracking)
+- react-native-nitro-modules **0.35.0+** (required for `createNativeArrayBuffer` and memory tracking)
 - Android API 26+ (ARM64 only)
 - **LiteRT-LM Android SDK**: `0.9.0-alpha01` (bundled automatically)
 - iOS 15.0+ (coming soon)

@@ -3,7 +3,7 @@
  *
  * Records real memory usage from OS-level APIs via `getMemoryUsage()`,
  * and stores snapshots in a native-backed ArrayBuffer allocated via
- * `NitroModules.createNativeArrayBuffer()` (v0.34+) for zero-copy interop.
+ * `NitroModules.createNativeArrayBuffer()` (v0.35+) for zero-copy interop.
  *
  * @example
  * ```typescript
