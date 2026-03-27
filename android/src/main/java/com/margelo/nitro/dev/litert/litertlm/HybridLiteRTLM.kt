@@ -32,6 +32,44 @@ import com.google.ai.edge.litertlm.Content
 typealias LiteRTMessage = com.google.ai.edge.litertlm.Message
 
 /**
+ * Named implementation of the LiteRT-LM MessageCallback for streaming inference.
+ *
+ * Extracted from the anonymous inline class in sendMessageAsync for testability.
+ * Accumulates response chunks, forwards tokens to JS, and appends the final
+ * response to the conversation history.
+ */
+internal class StreamingCallbackListener(
+    private val onToken: (String, Boolean) -> Unit,
+    private val responseBuilder: StringBuilder,
+    private val history: MutableList<Message>,
+) : com.google.ai.edge.litertlm.MessageCallback {
+
+    override fun onMessage(responseMsg: com.google.ai.edge.litertlm.LiteRTMessage) {
+        val chunk = responseMsg.contents
+            .filterIsInstance<com.google.ai.edge.litertlm.Content.Text>()
+            .joinToString("") { it.text }
+
+        onToken(chunk, false)
+
+        if (chunk.isNotEmpty()) {
+            responseBuilder.append(chunk)
+        }
+    }
+
+    override fun onDone() {
+        onToken("", true)
+        val fullResponse = responseBuilder.toString()
+        history.add(Message(Role.MODEL, fullResponse))
+        Log.d("StreamingCallbackListener", "Streaming done. Length: ${fullResponse.length}")
+    }
+
+    override fun onError(t: Throwable) {
+        Log.e("StreamingCallbackListener", "Async generation failed", t)
+        onToken("Error: ${t.message}", true)
+    }
+}
+
+/**
  * Kotlin implementation of LiteRTLM using the LiteRT-LM Android SDK.
  * This class bridges between React Native (via Nitro) and the Google LiteRT-LM Engine.
  */
@@ -234,32 +272,11 @@ class HybridLiteRTLM : HybridLiteRTLMSpec() {
 
         val fullResponseBuilder = StringBuilder()
         
-        // Define callback
-        val listener = object : com.google.ai.edge.litertlm.MessageCallback {
-             override fun onMessage(responseMsg: LiteRTMessage) {
-                val chunk = responseMsg.contents
-                    .filterIsInstance<com.google.ai.edge.litertlm.Content.Text>()
-                    .joinToString("") { it.text }
-
-                onToken(chunk, false)
-                
-                if (chunk.isNotEmpty()) {
-                    fullResponseBuilder.append(chunk)
-                }
-            }
-            
-            override fun onDone() {
-                onToken("", true)
-                val fullResponse = fullResponseBuilder.toString()
-                history.add(Message(Role.MODEL, fullResponse))
-                Log.d(TAG, "sendMessageAsync done. Length: ${fullResponse.length}")
-            }
-            
-            override fun onError(t: Throwable) {
-                Log.e(TAG, "Async generation failed", t)
-                onToken("Error: ${t.message}", true)
-            }
-        }
+        val listener = StreamingCallbackListener(
+            onToken = onToken,
+            responseBuilder = fullResponseBuilder,
+            history = history,
+        )
 
         try {
             val userMsg = LiteRTMessage.of(message)
