@@ -9,6 +9,7 @@ import android.util.Log
 import android.os.Debug
 import android.app.ActivityManager
 import android.content.Context
+import java.util.Collections
 import androidx.annotation.Keep
 import com.facebook.proguard.annotations.DoNotStrip
 import dev.litert.litertlm.LiteRTLMInitProvider
@@ -68,7 +69,10 @@ class HybridLiteRTLM : HybridLiteRTLMSpec() {
     private var isClosed = false
 
     // Conversation history for getHistory()
-    private val history = mutableListOf<Message>()
+    // Synchronized to prevent ConcurrentModificationException: history is
+    // written from Promise.parallel workers and sendMessageAsync SDK callbacks,
+    // and read from getHistory() which may be called from the JS thread.
+    private val history: MutableList<Message> = Collections.synchronizedList(mutableListOf())
 
     // Last generation stats
     private var lastStats = GenerationStats(
@@ -187,7 +191,9 @@ class HybridLiteRTLM : HybridLiteRTLMSpec() {
             
             // Blocking inference (safe here because we are in Promise.parallel worker thread)
             val userMsg = LiteRTMessage.of(message)
+            val startTime = System.nanoTime()
             val responseMsg = conversation!!.sendMessage(userMsg)
+            val elapsedMs = (System.nanoTime() - startTime) / 1_000_000.0
             
             // Extract text
             val response = responseMsg.contents
@@ -197,14 +203,16 @@ class HybridLiteRTLM : HybridLiteRTLMSpec() {
             // Add model response to history
             history.add(Message(Role.MODEL, response))
             
-            // Update stats
+            // Update stats with real timing data
+            val promptTokens = message.length / 4.0
+            val completionTokens = response.length / 4.0
             lastStats = GenerationStats(
-                promptTokens = message.length / 4.0,
-                completionTokens = response.length / 4.0,
-                totalTokens = (message.length + response.length) / 4.0,
-                timeToFirstToken = 0.0,
-                totalTime = 0.0,
-                tokensPerSecond = 0.0
+                promptTokens = promptTokens,
+                completionTokens = completionTokens,
+                totalTokens = promptTokens + completionTokens,
+                timeToFirstToken = 0.0, // Not available from sync API
+                totalTime = elapsedMs,
+                tokensPerSecond = if (elapsedMs > 0) completionTokens / (elapsedMs / 1000.0) else 0.0
             )
             
             response // Return the string
@@ -335,6 +343,15 @@ class HybridLiteRTLM : HybridLiteRTLMSpec() {
                 .joinToString("") { it.text }
 
             history.add(Message(Role.MODEL, response))
+
+            // Clean up temp resized image to prevent cache dir bloat
+            if (processedImagePath != imagePath) {
+                try {
+                    java.io.File(processedImagePath).delete()
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to clean up temp image: ${e.message}")
+                }
+            }
             
             response
         }
@@ -481,11 +498,16 @@ class HybridLiteRTLM : HybridLiteRTLMSpec() {
     // Helpers
     // -------------------------------------------------------------------------
     override fun getHistory(): Array<Message> {
-        return history.toTypedArray()
+        // Synchronized list requires manual sync for iteration/copy
+        synchronized(history) {
+            return history.toTypedArray()
+        }
     }
 
     override fun resetConversation() {
-        history.clear()
+        synchronized(history) {
+            history.clear()
+        }
         createNewConversation()
     }
 
