@@ -132,12 +132,8 @@ export function checkBackendSupport(backend: Backend): string | undefined {
       return "NPU backend requires compatible hardware (Qualcomm Hexagon, MediaTek APU, etc.). Will fall back to GPU if unavailable.";
     }
     if (Platform.OS === "ios") {
-      return "NPU/CoreML is not yet supported on iOS. LiteRT-LM iOS support is pending.";
+      return "NPU (Neural Engine) is not yet supported on iOS. Use 'gpu' (Metal) or 'cpu' instead.";
     }
-  }
-
-  if (Platform.OS === "ios" && backend !== "cpu") {
-    return "LiteRT-LM iOS is not yet released. Only CPU backend may work via fallback.";
   }
 
   return undefined;
@@ -162,7 +158,7 @@ export function checkBackendSupport(backend: Backend): string | undefined {
  */
 export function checkMultimodalSupport(): string | undefined {
   if (Platform.OS === "ios") {
-    return "Multimodal (image/audio) is not yet supported on iOS. LiteRT-LM iOS SDK is pending.";
+    return "Multimodal (image/audio) is experimental on iOS. Vision and audio executors may not be available in the current build.";
   }
   return undefined;
 }

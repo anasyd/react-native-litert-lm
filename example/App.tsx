@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   Platform,
   ActivityIndicator,
+  TextInput,
 } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import {
@@ -19,9 +20,17 @@ import {
   type ChatMessage,
 } from "react-native-litert-lm";
 
-// Test asset paths (push manually to device for multimodal tests)
-const TEST_IMAGE_PATH = "/data/local/tmp/test.jpeg";
-const TEST_AUDIO_PATH = "/data/local/tmp/test.wav";
+// Test asset paths — platform-aware
+const TEST_IMAGE_PATH = Platform.select({
+  ios: `${(global as any).__DOCUMENTS_PATH ?? '/tmp'}/test.jpeg`,
+  android: '/data/local/tmp/test.jpeg',
+  default: '/tmp/test.jpeg',
+})!;
+const TEST_AUDIO_PATH = Platform.select({
+  ios: `${(global as any).__DOCUMENTS_PATH ?? '/tmp'}/test.wav`,
+  android: '/data/local/tmp/test.wav',
+  default: '/tmp/test.wav',
+})!;
 
 const THEME = {
   bg: "#050505",
@@ -60,7 +69,7 @@ export default function App() {
 function Main() {
   const config = useMemo(
     () => ({
-      backend: "cpu" as const,
+      backend: Platform.OS === 'ios' ? 'gpu' as const : 'cpu' as const,
       systemPrompt: "You are a helpful assistant.",
       maxTokens: 1024,
       autoLoad: false,
@@ -85,6 +94,7 @@ function Main() {
   const [isRunning, setIsRunning] = useState(false);
   const [lastLatency, setLastLatency] = useState<number | null>(null);
   const [tokensPerSec, setTokensPerSec] = useState<number | null>(null);
+  const [chatInput, setChatInput] = useState('');
 
   const log = useCallback(
     (message: string, type: LogEntry["type"] = "info") => {
@@ -309,15 +319,11 @@ function Main() {
 
         <Section title="Device">
           <InfoRow
-            label="Device"
-            value={Platform.OS}
-          />
-          <InfoRow
-            label="OS Version"
+            label="Platform"
             value={`${Platform.OS} ${Platform.Version}`}
           />
-          <InfoRow label="Platform" value={Platform.OS} />
           <InfoRow label="Backend" value={config.backend.toUpperCase()} />
+          <InfoRow label="Architecture" value={Platform.OS === 'ios' ? 'arm64' : 'arm64'} />
         </Section>
 
         <Section title="Model">
@@ -407,6 +413,50 @@ function Main() {
             )}
           </View>
         </Section>
+
+        {isReady && (
+          <Section title="Quick Chat">
+            <View style={styles.chatInputContainer}>
+              <TextInput
+                style={styles.chatInput}
+                placeholder="Type a message..."
+                placeholderTextColor={THEME.textDim}
+                value={chatInput}
+                onChangeText={setChatInput}
+                editable={!isRunning}
+              />
+              <TouchableOpacity
+                style={[
+                  styles.sendButton,
+                  (!chatInput.trim() || isRunning) && styles.disabledButton,
+                ]}
+                onPress={async () => {
+                  if (!model || !chatInput.trim()) return;
+                  const msg = chatInput.trim();
+                  setChatInput('');
+                  setIsRunning(true);
+                  log(`You: ${msg}`, 'info');
+                  try {
+                    const t0 = Date.now();
+                    const resp = await model.sendMessage(msg);
+                    const elapsed = Date.now() - t0;
+                    setLastLatency(elapsed);
+                    log(`Model: ${resp}`, 'success');
+                    const stats = model.getStats();
+                    setTokensPerSec(stats.tokensPerSecond);
+                  } catch (e: any) {
+                    log(`Error: ${e.message}`, 'error');
+                  } finally {
+                    setIsRunning(false);
+                  }
+                }}
+                disabled={!chatInput.trim() || isRunning}
+              >
+                <Text style={styles.buttonText}>Send</Text>
+              </TouchableOpacity>
+            </View>
+          </Section>
+        )}
 
         {memorySummary && memorySummary.snapshotCount > 0 && (
           <Section title="Native Memory Usage">
@@ -678,5 +728,28 @@ const styles = StyleSheet.create({
     color: THEME.accent,
     fontWeight: "800",
     fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  },
+  chatInputContainer: {
+    flexDirection: "row",
+    gap: 10,
+    alignItems: "center",
+  },
+  chatInput: {
+    flex: 1,
+    backgroundColor: THEME.card,
+    borderRadius: 12,
+    padding: 14,
+    color: THEME.text,
+    fontSize: 15,
+    borderWidth: 1,
+    borderColor: THEME.border,
+  },
+  sendButton: {
+    backgroundColor: THEME.accent,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    alignItems: "center",
+    minHeight: 48,
   },
 });

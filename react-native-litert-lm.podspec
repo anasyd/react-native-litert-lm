@@ -16,36 +16,49 @@ Pod::Spec.new do |s|
 
   s.source_files = [
     # Implementation (C++)
-    "cpp/**/*.{hpp,cpp}",
+    "cpp/**/*.{hpp,cpp,h}",
     # Autolinking (Objective-C++)
     "ios/**/*.{m,mm}",
     # Nitrogen generated iOS bridge
     "nitrogen/generated/ios/**/*.{mm,swift}",
   ]
 
+  # Exclude Android-only JNI files from iOS build
+  s.exclude_files = [
+    "cpp/cpp-adapter.cpp",
+  ]
+
+  # Prebuilt LiteRT-LM C engine (static library built from Bazel //c:engine target).
+  # Downloaded from GitHub releases by postinstall.js, or built locally via:
+  #   scripts/build-ios-engine.sh
+  s.vendored_frameworks = 'ios/Frameworks/LiteRTLM.xcframework'
+
   s.pod_target_xcconfig = {
     'CLANG_CXX_LANGUAGE_STANDARD' => 'c++20',
     'CLANG_CXX_LIBRARY' => 'libc++',
     'HEADER_SEARCH_PATHS' => [
       '"$(PODS_TARGET_SRCROOT)/cpp"',
+      '"$(PODS_TARGET_SRCROOT)/cpp/include"',
       '"$(PODS_TARGET_SRCROOT)/nitrogen/generated/shared/c++"',
       '"$(PODS_TARGET_SRCROOT)/nitrogen/generated/ios"',
     ].join(' '),
-    # Stub mode - LiteRT-LM iOS not yet available
-    'GCC_PREPROCESSOR_DEFINITIONS' => '$(inherited) LITERT_LM_IOS_STUB=1',
+    'OTHER_LDFLAGS' => '$(inherited) -ObjC',
   }
 
   # Load nitrogen autolinking
   load 'nitrogen/generated/ios/LiteRTLM+autolinking.rb'
   add_nitrogen_files(s)
 
-  # Core dependencies only - no LLM runtime yet
+  # Core React Native dependencies
   s.dependency 'React-jsi'
   s.dependency 'React-callinvoker'
   s.dependency 'ReactCommon/turbomodule/core'
-  
-  # TODO: Add LiteRT-LM iOS dependency when officially released
-  # s.dependency 'LiteRTLM', '~> 1.0'
+
+  # Apple frameworks needed by LiteRT-LM engine
+  # Metal/MPS: GPU inference, Accelerate: BLAS/LAPACK, CoreML: delegate
+  s.frameworks = ['Metal', 'MetalPerformanceShaders', 'Accelerate', 'CoreML', 'CoreGraphics']
+  s.libraries = ['c++']
 
   install_modules_dependencies(s)
 end
+

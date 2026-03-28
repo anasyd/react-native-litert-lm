@@ -2,7 +2,7 @@
 // HybridLiteRTLM.cpp
 // react-native-litert-lm
 //
-// High-performance LLM inference using LiteRT-LM.
+// High-performance LLM inference using LiteRT-LM C API.
 //
 // NOTE: This C++ implementation is used for iOS ONLY.
 // Android uses the Kotlin implementation in `android/src/main/java/com/margelo/nitro/dev/litert/litertlm/HybridLiteRTLM.kt`.
@@ -11,84 +11,201 @@
 
 #include "HybridLiteRTLM.hpp"
 
-#define STB_IMAGE_IMPLEMENTATION
-#include "include/stb_image.h"
 
+
+
+#include <NitroModules/Promise.hpp>
 #include <chrono>
 #include <stdexcept>
 #include <sstream>
+
+#ifdef __APPLE__
+#include "IOSDownloadHelper.h"
+#endif
 #include <fstream>
+#include <thread>
+#include <regex>
 
 namespace margelo::nitro::litertlm {
 
-//------------------------------------------------------------------------------
-// Helper: Format user prompt (applies chat template if needed)
-//------------------------------------------------------------------------------
-std::string HybridLiteRTLM::formatUserPrompt(const std::string& message) const {
-  // The LiteRT-LM Conversation class handles chat templates internally,
-  // so we just return the message as-is. If we were using Session directly,
-  // we'd apply the Gemma/Phi template here.
-  return message;
+// =============================================================================
+// JSON Helpers
+// =============================================================================
+
+std::string HybridLiteRTLM::escapeJson(const std::string& input) {
+  std::string output;
+  output.reserve(input.size() + 16);
+  for (char c : input) {
+    switch (c) {
+      case '"':  output += "\\\""; break;
+      case '\\': output += "\\\\"; break;
+      case '\n': output += "\\n"; break;
+      case '\r': output += "\\r"; break;
+      case '\t': output += "\\t"; break;
+      case '\b': output += "\\b"; break;
+      case '\f': output += "\\f"; break;
+      default:   output += c; break;
+    }
+  }
+  return output;
 }
 
-//------------------------------------------------------------------------------
-// Helper: Create a new Conversation from existing Engine
-//------------------------------------------------------------------------------
+std::string HybridLiteRTLM::buildTextMessageJson(const std::string& text) {
+  return "{\"role\":\"user\",\"content\":\"" + escapeJson(text) + "\"}";
+}
+
+std::string HybridLiteRTLM::buildImageMessageJson(const std::string& text, const std::string& imagePath) {
+  return "{\"role\":\"user\",\"content\":["
+         "{\"type\":\"text\",\"text\":\"" + escapeJson(text) + "\"},"
+         "{\"type\":\"image\",\"path\":\"" + escapeJson(imagePath) + "\"}"
+         "]}";
+}
+
+std::string HybridLiteRTLM::buildAudioMessageJson(const std::string& text, const std::string& audioPath) {
+  return "{\"role\":\"user\",\"content\":["
+         "{\"type\":\"text\",\"text\":\"" + escapeJson(text) + "\"},"
+         "{\"type\":\"audio\",\"path\":\"" + escapeJson(audioPath) + "\"}"
+         "]}";
+}
+
+std::string HybridLiteRTLM::extractTextFromResponse(const std::string& jsonResponse) {
+  // The C API response JSON is structured as:
+  //   {"role":"model","content":[{"type":"text","text":"..."}]}
+  // or:
+  //   {"role":"model","content":"..."}
+  //
+  // We use simple string extraction to avoid a JSON library dependency.
+  
+  // Try array format first: find "text":"..." after "type":"text"
+  std::string textMarker = "\"text\":\"";
+  size_t pos = jsonResponse.find("\"type\":\"text\"");
+  if (pos != std::string::npos) {
+    pos = jsonResponse.find(textMarker, pos);
+    if (pos != std::string::npos) {
+      pos += textMarker.length();
+      std::string result;
+      result.reserve(jsonResponse.size() - pos);
+      for (size_t i = pos; i < jsonResponse.size(); i++) {
+        if (jsonResponse[i] == '\\' && i + 1 < jsonResponse.size()) {
+          char next = jsonResponse[i + 1];
+          if (next == '"') { result += '"'; i++; }
+          else if (next == '\\') { result += '\\'; i++; }
+          else if (next == 'n') { result += '\n'; i++; }
+          else if (next == 'r') { result += '\r'; i++; }
+          else if (next == 't') { result += '\t'; i++; }
+          else { result += jsonResponse[i]; }
+        } else if (jsonResponse[i] == '"') {
+          break;  // End of the text value
+        } else {
+          result += jsonResponse[i];
+        }
+      }
+      return result;
+    }
+  }
+  
+  // Try simple string format: "content":"..."
+  std::string contentMarker = "\"content\":\"";
+  pos = jsonResponse.find(contentMarker);
+  if (pos != std::string::npos) {
+    pos += contentMarker.length();
+    std::string result;
+    for (size_t i = pos; i < jsonResponse.size(); i++) {
+      if (jsonResponse[i] == '\\' && i + 1 < jsonResponse.size()) {
+        char next = jsonResponse[i + 1];
+        if (next == '"') { result += '"'; i++; }
+        else if (next == '\\') { result += '\\'; i++; }
+        else if (next == 'n') { result += '\n'; i++; }
+        else { result += jsonResponse[i]; }
+      } else if (jsonResponse[i] == '"') {
+        break;
+      } else {
+        result += jsonResponse[i];
+      }
+    }
+    return result;
+  }
+  
+  // Fallback: return full response
+  return jsonResponse;
+}
+
+// =============================================================================
+// Conversation Management
+// =============================================================================
+
 void HybridLiteRTLM::createNewConversation() {
-#ifdef LITERT_LM_ENABLED
+#ifdef __APPLE__
   if (!engine_) {
     throw std::runtime_error("Cannot create conversation: engine not initialized");
   }
   
-  auto conversation_config = litert::lm::ConversationConfig::CreateDefault(*engine_);
-  if (!conversation_config.ok()) {
-    throw std::runtime_error("Failed to create conversation config: " + 
-        std::string(conversation_config.status().message()));
+  // Clean up previous conversation
+  if (conversation_) {
+    litert_lm_conversation_delete(conversation_);
+    conversation_ = nullptr;
+  }
+  if (conv_config_) {
+    litert_lm_conversation_config_delete(conv_config_);
+    conv_config_ = nullptr;
   }
   
-  // Apply system prompt/instruction if provided
+  // Build system message JSON if provided
+  std::string systemMsgJson;
+  const char* systemMsgPtr = nullptr;
   if (!systemPrompt_.empty()) {
-    conversation_config->set_system_instruction(systemPrompt_);
+    systemMsgJson = "{\"role\":\"system\",\"content\":\"" + escapeJson(systemPrompt_) + "\"}";
+    systemMsgPtr = systemMsgJson.c_str();
   }
   
-  auto conversation = litert::lm::Conversation::Create(*engine_, *conversation_config);
-  if (!conversation.ok()) {
-    throw std::runtime_error("Failed to create conversation: " + 
-        std::string(conversation.status().message()));
+  // Create conversation config with session config
+  conv_config_ = litert_lm_conversation_config_create(
+    engine_,
+    session_config_,  // may be nullptr for defaults
+    systemMsgPtr,     // system message
+    nullptr,          // tools (not used yet)
+    nullptr,          // messages history
+    false             // constrained decoding
+  );
+  if (!conv_config_) {
+    throw std::runtime_error("Failed to create conversation config");
   }
-  conversation_ = std::move(*conversation);
+  
+  // Create conversation
+  conversation_ = litert_lm_conversation_create(engine_, conv_config_);
+  if (!conversation_) {
+    litert_lm_conversation_config_delete(conv_config_);
+    conv_config_ = nullptr;
+    throw std::runtime_error("Failed to create conversation");
+  }
 #endif
 }
 
-//------------------------------------------------------------------------------
-// loadModel - Initialize Engine and Conversation
-//------------------------------------------------------------------------------
-void HybridLiteRTLM::loadModel(
+// =============================================================================
+// loadModel
+// =============================================================================
+
+std::shared_ptr<Promise<void>> HybridLiteRTLM::loadModel(
+    const std::string& modelPath,
+    const std::optional<LLMConfig>& config) {
+  return Promise<void>::async([this, modelPath, config]() {
+    loadModelInternal(modelPath, config);
+  });
+}
+
+void HybridLiteRTLM::loadModelInternal(
     const std::string& modelPath,
     const std::optional<LLMConfig>& config) {
   
   std::lock_guard<std::mutex> lock(mutex_);
   
-  // Clean up existing resources
   if (isLoaded_) {
-    isLoaded_ = false;
-    history_.clear();
-#ifdef LITERT_LM_ENABLED
-    conversation_.reset();
-    engine_.reset();
-#endif
+    close();
   }
   
-  // Apply configuration
   if (config.has_value()) {
     if (config->backend.has_value()) {
       backend_ = config->backend.value();
-    }
-    if (config->visionBackend.has_value()) {
-      visionBackend_ = config->visionBackend.value();
-    }
-    if (config->audioBackend.has_value()) {
-      audioBackend_ = config->audioBackend.value();
     }
     if (config->temperature.has_value()) {
       temperature_ = config->temperature.value();
@@ -107,518 +224,513 @@ void HybridLiteRTLM::loadModel(
     }
   }
   
-#ifdef LITERT_LM_ENABLED
-  // 1. Create ModelAssets from model path
-  auto model_assets = litert::lm::ModelAssets::Create(modelPath);
-  if (!model_assets.ok()) {
-    throw std::runtime_error("Failed to load model assets: " + 
-        std::string(model_assets.status().message()));
-  }
+#ifdef __APPLE__
+  // Set log verbosity: 2=WARNING (production), 0=INFO (debug)
+  litert_lm_set_min_log_level(2);
 
-  // 2. Map our Backend enum to LiteRT-LM Backend enum
-  auto engine_backend = (backend_ == Backend::GPU) 
-    ? litert::lm::Backend::GPU 
-    : litert::lm::Backend::CPU;
-  auto vision_backend = (visionBackend_ == Backend::GPU)
-    ? litert::lm::Backend::GPU 
-    : litert::lm::Backend::CPU;
-  auto audio_backend = (audioBackend_ == Backend::GPU)
-    ? litert::lm::Backend::GPU 
-    : litert::lm::Backend::CPU;
-
-  // 3. Create EngineSettings with all backends
-  auto engine_settings = litert::lm::EngineSettings::CreateDefault(
-    *model_assets, 
-    engine_backend,
-    vision_backend,
-    audio_backend
-  );
-
-  // 4. Create the Engine (heavyweight - loads model weights)
-  auto engine = litert::lm::Engine::CreateEngine(engine_settings);
-  if (!engine.ok()) {
-    throw std::runtime_error("Failed to create engine: " + 
-        std::string(engine.status().message()));
-  }
-  engine_ = std::move(*engine);
-
-  // 5. Create the Conversation (lightweight - holds KV cache)
-  createNewConversation();
+  auto backendStr = [](Backend b) -> const char* {
+    switch (b) {
+      case Backend::GPU: return "gpu";
+      case Backend::NPU: return "gpu"; // NPU not available on iOS, use GPU
+      default: return "cpu";
+    }
+  };
   
-#endif // LITERT_LM_ENABLED
+  auto tryCreateEngine = [&](const char* backend, const char* visionBackend) -> bool {
+    auto* settings = litert_lm_engine_settings_create(
+      modelPath.c_str(),
+      backend,
+      visionBackend,
+      "cpu" // audio always on CPU
+    );
+    if (!settings) {
+      return false;
+    }
+    
+    litert_lm_engine_settings_set_max_num_tokens(settings, static_cast<int>(maxTokens_));
+    litert_lm_engine_settings_enable_benchmark(settings);
+    
+    engine_ = litert_lm_engine_create(settings);
+    litert_lm_engine_settings_delete(settings);
+    
+    return engine_ != nullptr;
+  };
+  
+  // Try requested backend first (e.g. gpu/gpu)
+  const char* primaryBackend = backendStr(backend_);
+  if (!tryCreateEngine(primaryBackend, primaryBackend)) {
+    // Fallback chain for when the primary backend fails:
+    bool fallbackOk = false;
+    if (backend_ != Backend::CPU) {
+      // 1) Try CPU main + GPU vision (model's vision encoder often requires GPU)
+      fallbackOk = tryCreateEngine("cpu", "gpu");
+      // 2) Try CPU main + CPU vision
+      if (!fallbackOk) fallbackOk = tryCreateEngine("cpu", "cpu");
+    }
+    // 3) Try CPU main + no vision (nullptr skips vision executor entirely)
+    if (!fallbackOk) fallbackOk = tryCreateEngine("cpu", nullptr);
+    if (fallbackOk) {
+      backend_ = Backend::CPU;
+    }
+  }
+  
+  if (!engine_) {
+    throw std::runtime_error(
+      "Failed to create LiteRT-LM engine. Tried backend '" +
+      std::string(primaryBackend) + "' and CPU fallback. Model path: " + modelPath);
+  }
+  
+  session_config_ = litert_lm_session_config_create();
+  if (session_config_) {
+    litert_lm_session_config_set_max_output_tokens(session_config_, static_cast<int>(maxTokens_));
+    
+    LiteRtLmSamplerParams sampler{};
+    sampler.type = kTopP;
+    sampler.top_k = static_cast<int32_t>(topK_);
+    sampler.top_p = static_cast<float>(topP_);
+    sampler.temperature = static_cast<float>(temperature_);
+    sampler.seed = 0;
+    litert_lm_session_config_set_sampler_params(session_config_, &sampler);
+  }
+  
+  createNewConversation();
+#endif
   
   isLoaded_ = true;
   history_.clear();
-  
-  // Reset stats
   lastStats_ = GenerationStats{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 }
 
-//------------------------------------------------------------------------------
-// sendMessage - Blocking text inference
-//------------------------------------------------------------------------------
-std::string HybridLiteRTLM::sendMessage(const std::string& message) {
+// =============================================================================
+// sendMessage — Blocking text inference
+// =============================================================================
+
+std::shared_ptr<Promise<std::string>> HybridLiteRTLM::sendMessage(const std::string& message) {
+  return Promise<std::string>::async([this, message]() -> std::string {
+    return sendMessageInternal(message);
+  });
+}
+
+std::string HybridLiteRTLM::sendMessageInternal(const std::string& message) {
   std::lock_guard<std::mutex> lock(mutex_);
   ensureLoaded();
   
-  auto startTime = std::chrono::high_resolution_clock::now();
+  auto startTime = std::chrono::steady_clock::now();
+  std::string result;
   
-  // Add user message to history
-  Message userMessage;
-  userMessage.role = Role::USER;
-  userMessage.content = message;
-  history_.push_back(userMessage);
+#ifdef __APPLE__
+  std::string msgJson = buildTextMessageJson(message);
   
-  std::string responseText;
+  auto* response = litert_lm_conversation_send_message(
+    conversation_, msgJson.c_str(), nullptr);
   
-#ifdef LITERT_LM_ENABLED
-  // Build the message struct for LiteRT-LM
-  // The Conversation API expects a structured input
-  litert::lm::UserMessage lm_message;
-  lm_message.role = "user";
-  lm_message.content = message;
-  
-  auto response = conversation_->SendMessage(lm_message);
-  if (!response.ok()) {
-    // Remove the user message we just added since inference failed
-    history_.pop_back();
-    throw std::runtime_error("Inference failed: " + 
-        std::string(response.status().message()));
+  if (!response) {
+    throw std::runtime_error("LiteRT-LM: sendMessage failed");
   }
   
-  responseText = response->content;
-  
-  // Update stats from response if available
-  if (response->stats.has_value()) {
-    const auto& stats = response->stats.value();
-    lastStats_.promptTokens = static_cast<double>(stats.prompt_tokens);
-    lastStats_.completionTokens = static_cast<double>(stats.completion_tokens);
-    lastStats_.totalTokens = lastStats_.promptTokens + lastStats_.completionTokens;
-    lastStats_.timeToFirstToken = stats.time_to_first_token_ms;
-    lastStats_.totalTime = stats.total_time_ms;
-    lastStats_.tokensPerSecond = (lastStats_.totalTime > 0) 
-      ? lastStats_.completionTokens / (lastStats_.totalTime / 1000.0)
-      : 0.0;
+  const char* responseStr = litert_lm_json_response_get_string(response);
+  if (responseStr) {
+    result = extractTextFromResponse(std::string(responseStr));
   }
+  litert_lm_json_response_delete(response);
   
+  auto* benchInfo = litert_lm_conversation_get_benchmark_info(conversation_);
+  if (benchInfo) {
+    int numDecodeTurns = litert_lm_benchmark_info_get_num_decode_turns(benchInfo);
+    if (numDecodeTurns > 0) {
+      int lastIdx = numDecodeTurns - 1;
+      lastStats_.tokensPerSecond = litert_lm_benchmark_info_get_decode_tokens_per_sec_at(benchInfo, lastIdx);
+      lastStats_.completionTokens = static_cast<double>(
+        litert_lm_benchmark_info_get_decode_token_count_at(benchInfo, lastIdx));
+    }
+    lastStats_.timeToFirstToken = litert_lm_benchmark_info_get_time_to_first_token(benchInfo);
+    litert_lm_benchmark_info_delete(benchInfo);
+  }
 #else
-  // Stub response when LiteRT-LM is not available
-  responseText = "[LiteRT-LM Stub] Model response placeholder. "
-    "Real inference will be available when LiteRT-LM libraries are integrated. "
-    "You said: " + message;
-  
-  auto endTime = std::chrono::high_resolution_clock::now();
-  auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
-  
-  // Estimate stats for stub
-  lastStats_.promptTokens = static_cast<double>(message.length() / 4);
-  lastStats_.completionTokens = static_cast<double>(responseText.length() / 4);
-  lastStats_.totalTokens = lastStats_.promptTokens + lastStats_.completionTokens;
-  lastStats_.totalTime = static_cast<double>(duration);
-  lastStats_.timeToFirstToken = lastStats_.totalTime / 2;
-  lastStats_.tokensPerSecond = (lastStats_.totalTime > 0) 
-    ? lastStats_.completionTokens / (lastStats_.totalTime / 1000.0)
-    : 0;
+  // Non-Apple stub
+  result = "[iOS only] LiteRT-LM inference not available on this platform.";
 #endif
   
-  // Add model response to history
-  Message modelMessage;
-  modelMessage.role = Role::MODEL;
-  modelMessage.content = responseText;
-  history_.push_back(modelMessage);
+  auto endTime = std::chrono::steady_clock::now();
+  double latencyMs = std::chrono::duration<double, std::milli>(endTime - startTime).count();
+  lastStats_.totalTime = latencyMs / 1000.0;
   
-  return responseText;
+  // Update history
+  history_.push_back(Message{Role::USER, message});
+  history_.push_back(Message{Role::MODEL, result});
+  
+  return result;
 }
 
-//------------------------------------------------------------------------------
-// sendMessageWithImage - Multimodal image + text
-//------------------------------------------------------------------------------
-std::string HybridLiteRTLM::sendMessageWithImage(
+// =============================================================================
+// sendMessageAsync — Streaming text inference
+// =============================================================================
+
+void HybridLiteRTLM::streamCallbackFn(void* callback_data, const char* chunk,
+                                        bool is_final, const char* error_msg) {
+  auto* ctx = static_cast<StreamContext*>(callback_data);
+  
+  if (error_msg) {
+    // Error occurred — notify JS and clean up
+    ctx->onToken(std::string("Error: ") + error_msg, true);
+    delete ctx;
+    return;
+  }
+  
+  if (is_final) {
+    // Calculate stats
+    auto endTime = std::chrono::steady_clock::now();
+    double durationMs = std::chrono::duration<double, std::milli>(endTime - ctx->startTime).count();
+    
+    if (ctx->lastStats && ctx->tokenCount > 0) {
+      ctx->lastStats->completionTokens = static_cast<double>(ctx->tokenCount);
+      ctx->lastStats->totalTime = durationMs / 1000.0;
+      ctx->lastStats->tokensPerSecond = (ctx->tokenCount / durationMs) * 1000.0;
+    }
+    
+    // Update history (thread-safe)
+    {
+      std::lock_guard<std::mutex> lock(*ctx->historyMutex);
+      ctx->history->push_back(Message{Role::USER, ctx->userMessage});
+      ctx->history->push_back(Message{Role::MODEL, ctx->fullResponse});
+    }
+    
+    ctx->onToken("", true);
+    delete ctx;
+    return;
+  }
+  
+  if (chunk) {
+    std::string token(chunk);
+    ctx->fullResponse += token;
+    ctx->tokenCount++;
+    ctx->onToken(token, false);
+  }
+}
+
+void HybridLiteRTLM::sendMessageAsync(
+    const std::string& message,
+    const std::function<void(const std::string&, bool)>& onToken) {
+  
+  // Copy values for the background thread (avoid use-after-free)
+  auto onTokenCopy = onToken;
+  auto messageCopy = message;
+  
+  // Capture shared state safely
+  auto* ctx = new StreamContext();
+  ctx->onToken = std::move(onTokenCopy);
+  ctx->fullResponse = "";
+  ctx->history = &history_;
+  ctx->historyMutex = &mutex_;
+  ctx->userMessage = messageCopy;
+  ctx->lastStats = &lastStats_;
+  ctx->startTime = std::chrono::steady_clock::now();
+  ctx->tokenCount = 0;
+  
+#ifdef __APPLE__
+  ensureLoaded();
+  
+  std::string msgJson = buildTextMessageJson(messageCopy);
+  
+  int result = litert_lm_conversation_send_message_stream(
+    conversation_, msgJson.c_str(), nullptr,
+    streamCallbackFn, ctx);
+  
+  if (result != 0) {
+    delete ctx;
+    throw std::runtime_error("LiteRT-LM: Failed to start streaming inference");
+  }
+#else
+  // Non-Apple stub
+  ctx->onToken("[iOS only] Streaming not available on this platform.", true);
+  delete ctx;
+#endif
+}
+
+// =============================================================================
+// sendMessageWithImage — Multimodal (vision)
+// =============================================================================
+
+std::shared_ptr<Promise<std::string>> HybridLiteRTLM::sendMessageWithImage(
+    const std::string& message,
+    const std::string& imagePath) {
+  return Promise<std::string>::async([this, message, imagePath]() -> std::string {
+    return sendMessageWithImageInternal(message, imagePath);
+  });
+}
+
+std::string HybridLiteRTLM::sendMessageWithImageInternal(
     const std::string& message,
     const std::string& imagePath) {
   
   std::lock_guard<std::mutex> lock(mutex_);
   ensureLoaded();
   
-#ifdef LITERT_LM_ENABLED
-  // Load image using stb_image
-  int width, height, channels;
-  unsigned char* img = stbi_load(imagePath.c_str(), &width, &height, &channels, 3); // Force 3 channels (RGB)
-  if (img == nullptr) {
-    throw std::runtime_error("Failed to load image from path: " + imagePath);
+  auto startTime = std::chrono::steady_clock::now();
+  std::string result;
+  
+#ifdef __APPLE__
+  // Verify image exists
+  std::ifstream imageFile(imagePath);
+  if (!imageFile.good()) {
+    throw std::runtime_error("Image file not found: " + imagePath);
   }
-
-  // Create input tensor/buffer for the engine.
-  // Note: The exact API for passing image data depends on the LiteRT-LM version.
-  // Assuming a structure that accepts raw bytes and dimensions.
-  litert::lm::UserMessage lm_message;
-  lm_message.role = "user";
+  imageFile.close();
   
-  // Construct multimodal content
-  // Option A: If UserMessage supports a list of content parts
-  litert::lm::ContentPart textPart;
-  textPart.type = litert::lm::ContentType::TEXT;
-  textPart.text = message;
-  lm_message.parts.push_back(textPart);
-
-  litert::lm::ContentPart imagePart;
-  imagePart.type = litert::lm::ContentType::IMAGE;
-  imagePart.image.width = width;
-  imagePart.image.height = height;
-  imagePart.image.channels = channels;
-  imagePart.image.data = std::vector<uint8_t>(img, img + (width * height * channels));
-  lm_message.parts.push_back(imagePart);
+  // Build multimodal message JSON — the C API handles image preprocessing
+  std::string msgJson = buildImageMessageJson(message, imagePath);
   
-  stbi_image_free(img);
-
-  auto response = conversation_->SendMessage(lm_message);
-  if (!response.ok()) {
-    throw std::runtime_error("Multimodal inference failed: " + 
-        std::string(response.status().message()));
+  auto* response = litert_lm_conversation_send_message(
+    conversation_, msgJson.c_str(), nullptr);
+  
+  if (!response) {
+    throw std::runtime_error("LiteRT-LM: sendMessageWithImage failed");
   }
   
-  // Add to history (metadata only)
-  Message userMessage;
-  userMessage.role = Role::USER;
-  userMessage.content = message + " [Image]"; 
-  history_.push_back(userMessage);
-  
-  Message modelMessage;
-  modelMessage.role = Role::MODEL;
-  modelMessage.content = response->content;
-  history_.push_back(modelMessage);
-  
-  return response->content;
-  
+  const char* responseStr = litert_lm_json_response_get_string(response);
+  if (responseStr) {
+    result = extractTextFromResponse(std::string(responseStr));
+  }
+  litert_lm_json_response_delete(response);
 #else
-  // iOS: LiteRT-LM SDK not yet available, throw clear error
-  throw std::runtime_error(
-      "sendMessageWithImage is not supported on iOS. "
-      "LiteRT-LM iOS SDK is not yet available. "
-      "Please use text-only sendMessage() for now.");
+  result = "[iOS only] Vision inference not available on this platform.";
 #endif
+  
+  auto endTime = std::chrono::steady_clock::now();
+  lastStats_.totalTime = std::chrono::duration<double>(endTime - startTime).count();
+  
+  history_.push_back(Message{Role::USER, message + " [image: " + imagePath + "]"});
+  history_.push_back(Message{Role::MODEL, result});
+  
+  return result;
 }
 
-//------------------------------------------------------------------------------
-// downloadModel - Download model file from URL
-//------------------------------------------------------------------------------
-std::future<std::string> HybridLiteRTLM::downloadModel(
-    const std::string& url,
-    const std::string& fileName,
-    const std::optional<std::function<void(double)>>& onProgress) {
-  
-  // Return a future that throws an exception
-  return std::async(std::launch::async, []() -> std::string {
-    throw std::runtime_error(
-        "downloadModel is not supported on iOS yet. "
-        "Please download the model manually using a separate library."
-    );
+// =============================================================================
+// sendMessageWithAudio — Multimodal (audio)
+// =============================================================================
+
+std::shared_ptr<Promise<std::string>> HybridLiteRTLM::sendMessageWithAudio(
+    const std::string& message,
+    const std::string& audioPath) {
+  return Promise<std::string>::async([this, message, audioPath]() -> std::string {
+    return sendMessageWithAudioInternal(message, audioPath);
   });
 }
 
-//------------------------------------------------------------------------------
-// sendMessageWithAudio - Multimodal audio + text
-//------------------------------------------------------------------------------
-std::string HybridLiteRTLM::sendMessageWithAudio(
+std::string HybridLiteRTLM::sendMessageWithAudioInternal(
     const std::string& message,
     const std::string& audioPath) {
   
   std::lock_guard<std::mutex> lock(mutex_);
   ensureLoaded();
   
-#ifdef LITERT_LM_ENABLED
-  // Load audio file
-  std::ifstream audioFile(audioPath, std::ios::binary);
-  if (!audioFile) {
-      throw std::runtime_error("Failed to open audio file: " + audioPath);
+  auto startTime = std::chrono::steady_clock::now();
+  std::string result;
+  
+#ifdef __APPLE__
+  std::ifstream audioFile(audioPath);
+  if (!audioFile.good()) {
+    throw std::runtime_error("Audio file not found: " + audioPath);
+  }
+  audioFile.close();
+  
+  std::string msgJson = buildAudioMessageJson(message, audioPath);
+  
+  auto* response = litert_lm_conversation_send_message(
+    conversation_, msgJson.c_str(), nullptr);
+  
+  if (!response) {
+    throw std::runtime_error("LiteRT-LM: sendMessageWithAudio failed");
   }
   
-  // Simple WAV header skip (simplistic, assuming standard header size for now or raw)
-  // Ideally use a WAV parsing library or miniaudio if available.
-  // For this implementation, we read the whole file.
-  std::vector<uint8_t> audioData((std::istreambuf_iterator<char>(audioFile)), std::istreambuf_iterator<char>());
-  
-  litert::lm::UserMessage lm_message;
-  lm_message.role = "user";
-  
-  litert::lm::ContentPart textPart;
-  textPart.type = litert::lm::ContentType::TEXT;
-  textPart.text = message;
-  lm_message.parts.push_back(textPart);
-
-  litert::lm::ContentPart audioPart;
-  audioPart.type = litert::lm::ContentType::AUDIO;
-  audioPart.audio.data = audioData;
-  // Metadata like sample rate might be needed:
-  // audioPart.audio.sample_rate = 16000; 
-  lm_message.parts.push_back(audioPart);
-
-  auto response = conversation_->SendMessage(lm_message);
-  if (!response.ok()) {
-    throw std::runtime_error("Audio inference failed: " + 
-        std::string(response.status().message()));
+  const char* responseStr = litert_lm_json_response_get_string(response);
+  if (responseStr) {
+    result = extractTextFromResponse(std::string(responseStr));
   }
-  
-  Message userMessage;
-  userMessage.role = Role::USER;
-  userMessage.content = message + " [Audio]";
-  history_.push_back(userMessage);
-  
-  Message modelMessage;
-  modelMessage.role = Role::MODEL;
-  modelMessage.content = response->content;
-  history_.push_back(modelMessage);
-  
-  return response->content;
-  
+  litert_lm_json_response_delete(response);
 #else
-  // iOS: LiteRT-LM SDK not yet available, throw clear error
-  throw std::runtime_error(
-      "sendMessageWithAudio is not supported on iOS. "
-      "LiteRT-LM iOS SDK is not yet available. "
-      "Please use text-only sendMessage() for now.");
+  result = "[iOS only] Audio inference not available on this platform.";
 #endif
+  
+  auto endTime = std::chrono::steady_clock::now();
+  lastStats_.totalTime = std::chrono::duration<double>(endTime - startTime).count();
+  
+  history_.push_back(Message{Role::USER, message + " [audio: " + audioPath + "]"});
+  history_.push_back(Message{Role::MODEL, result});
+  
+  return result;
 }
 
-//------------------------------------------------------------------------------
-// sendMessageAsync - Streaming token generation
-//------------------------------------------------------------------------------
-void HybridLiteRTLM::sendMessageAsync(
-    const std::string& message,
-    const std::function<void(std::string, bool)>& onToken) {
-  
-  // Note: We don't hold the lock during the entire async operation
-  // to avoid blocking other operations. The callback may be invoked
-  // from a different thread depending on LiteRT-LM's implementation.
-  
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    ensureLoaded();
-  }
-  
-#ifdef LITERT_LM_ENABLED
-  // Add user message to history before starting
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    Message userMessage;
-    userMessage.role = Role::USER;
-    userMessage.content = message;
-    history_.push_back(userMessage);
-  }
-  
-  litert::lm::UserMessage lm_message;
-  lm_message.role = "user";
-  lm_message.content = message;
-  
-  // Heap-allocate shared state for the async callback to avoid
-  // use-after-free: this function returns before the callback fires.
-  auto fullResponse = std::make_shared<std::string>();
-  // Copy onToken by value so the std::function survives past function return.
-  auto tokenCallback = onToken;
-  
-  auto status = conversation_->SendMessageAsync(
-    lm_message,
-    [this, tokenCallback, fullResponse](const std::string& token, bool isDone) {
-      *fullResponse += token;
-      
-      // Invoke the JS callback (Nitro handles thread marshalling)
-      tokenCallback(token, isDone);
-      
-      if (isDone) {
-        // Add complete response to history
-        std::lock_guard<std::mutex> lock(mutex_);
-        Message modelMessage;
-        modelMessage.role = Role::MODEL;
-        modelMessage.content = *fullResponse;
-        history_.push_back(modelMessage);
-      }
-    }
-  );
-  
-  if (!status.ok()) {
-    // Remove user message since inference failed
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!history_.empty()) {
-      history_.pop_back();
-    }
-    throw std::runtime_error("Async inference failed: " + 
-        std::string(status.message()));
-  }
-  
+// =============================================================================
+// downloadModel — Download model from URL
+// =============================================================================
+
+std::shared_ptr<Promise<std::string>> HybridLiteRTLM::downloadModel(
+    const std::string& url,
+    const std::string& fileName,
+    const std::optional<std::function<void(double)>>& onProgress) {
+  return Promise<std::string>::async([url, fileName, onProgress]() -> std::string {
+#ifdef __APPLE__
+    return litert_lm::downloadModelFile(url, fileName, onProgress);
 #else
-  // Stub: Simulate streaming by calling sendMessage and splitting response
-  std::string fullResponse;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    
-    // Add user message
-    Message userMessage;
-    userMessage.role = Role::USER;
-    userMessage.content = message;
-    history_.push_back(userMessage);
-    
-    fullResponse = "[LiteRT-LM Stub] Streaming response placeholder. You said: " + message;
-  }
-  
-  // Simulate token-by-token streaming
-  std::string currentWord;
-  for (size_t i = 0; i < fullResponse.length(); i++) {
-    char c = fullResponse[i];
-    currentWord += c;
-    
-    if (c == ' ' || c == '\n' || i == fullResponse.length() - 1) {
-      bool isDone = (i == fullResponse.length() - 1);
-      onToken(currentWord, isDone);
-      currentWord.clear();
+    std::string destPath = "/tmp/" + fileName;
+    std::string curlCmd = "curl -L -o \"" + destPath + "\" \"" + url + "\"";
+    int result = system(curlCmd.c_str());
+    if (result != 0) {
+      throw std::runtime_error("Failed to download model from: " + url);
     }
-  }
-  
-  // Add model response to history
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    Message modelMessage;
-    modelMessage.role = Role::MODEL;
-    modelMessage.content = fullResponse;
-    history_.push_back(modelMessage);
-  }
+    if (onProgress.has_value()) {
+      onProgress.value()(1.0);
+    }
+    return destPath;
 #endif
+  });
 }
 
-//------------------------------------------------------------------------------
-// getHistory - Return conversation history
-//------------------------------------------------------------------------------
+std::shared_ptr<Promise<void>> HybridLiteRTLM::deleteModel(const std::string& fileName) {
+  return Promise<void>::async([fileName]() {
+    std::string path;
+#ifdef __APPLE__
+    // Match the path used by IOSDownloadHelper: ~/Library/Caches/litert_models/
+    const char* home = getenv("HOME");
+    if (home) {
+      path = std::string(home) + "/Library/Caches/litert_models/" + fileName;
+    }
+#else
+    path = "/tmp/" + fileName;
+#endif
+    if (!path.empty()) {
+      std::remove(path.c_str());
+    }
+  });
+}
+
+// =============================================================================
+// getHistory
+// =============================================================================
+
 std::vector<Message> HybridLiteRTLM::getHistory() {
   std::lock_guard<std::mutex> lock(mutex_);
   return history_;
 }
 
-//------------------------------------------------------------------------------
-// resetConversation - Clear KV cache, keep engine
-//------------------------------------------------------------------------------
+// =============================================================================
+// resetConversation
+// =============================================================================
+
 void HybridLiteRTLM::resetConversation() {
   std::lock_guard<std::mutex> lock(mutex_);
   
-#ifdef LITERT_LM_ENABLED
-  // Destroy old conversation and create a new one
-  // This clears the KV cache but keeps the (expensive) Engine loaded
-  if (engine_) {
-    conversation_.reset();
+  history_.clear();
+  lastStats_ = GenerationStats{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+  
+#ifdef __APPLE__
+  if (isLoaded_ && engine_) {
     createNewConversation();
   }
 #endif
-  
-  history_.clear();
 }
 
-//------------------------------------------------------------------------------
-// isReady - Check if model is loaded
-//------------------------------------------------------------------------------
+// =============================================================================
+// isReady
+// =============================================================================
+
 bool HybridLiteRTLM::isReady() {
   std::lock_guard<std::mutex> lock(mutex_);
   return isLoaded_;
 }
 
-//------------------------------------------------------------------------------
-// getStats - Return last generation statistics
-//------------------------------------------------------------------------------
+// =============================================================================
+// getStats
+// =============================================================================
+
 GenerationStats HybridLiteRTLM::getStats() {
   std::lock_guard<std::mutex> lock(mutex_);
   return lastStats_;
 }
 
-//------------------------------------------------------------------------------
-// getMemoryUsage - Return real memory usage from OS
-//------------------------------------------------------------------------------
+// =============================================================================
+// getMemoryUsage — Uses Mach APIs for iOS process memory
+// =============================================================================
+
 MemoryUsage HybridLiteRTLM::getMemoryUsage() {
-  double nativeHeapBytes = 0;
-  double residentBytes = 0;
-  double availableMemoryBytes = 0;
+  double usedMemoryBytes = 0;
+  double totalMemoryBytes = 0;
+  double availableBytes = 0;
   bool isLowMemory = false;
-
+  
 #ifdef __APPLE__
-  // Get process memory info via Mach APIs
-  struct mach_task_basic_info taskInfo;
-  mach_msg_type_number_t infoCount = MACH_TASK_BASIC_INFO_COUNT;
-  if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO,
-                (task_info_t)&taskInfo, &infoCount) == KERN_SUCCESS) {
-    residentBytes = static_cast<double>(taskInfo.resident_size);
+  // Get app process memory (resident set size)
+  struct mach_task_basic_info info;
+  mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+  
+  kern_return_t kr = task_info(mach_task_self(),
+                               MACH_TASK_BASIC_INFO,
+                               (task_info_t)&info,
+                               &count);
+  
+  if (kr == KERN_SUCCESS) {
+    usedMemoryBytes = static_cast<double>(info.resident_size);
   }
-
-  // Get system-wide memory pressure
-  vm_statistics64_data_t vmStats;
-  mach_msg_type_number_t vmCount = HOST_VM_INFO64_COUNT;
-  if (host_statistics64(mach_host_self(), HOST_VM_INFO64,
-                        (host_info64_t)&vmStats, &vmCount) == KERN_SUCCESS) {
-    vm_size_t pageSize;
-    host_page_size(mach_host_self(), &pageSize);
-    availableMemoryBytes = static_cast<double>(vmStats.free_count) * pageSize;
-    // Consider low memory if free pages < 10% of total active+inactive+free
-    uint64_t totalPages = vmStats.active_count + vmStats.inactive_count + vmStats.free_count;
-    isLowMemory = (totalPages > 0) &&
-                  (static_cast<double>(vmStats.free_count) / totalPages < 0.1);
+  
+  // Get total physical memory
+  mach_port_t host_port = mach_host_self();
+  struct host_basic_info hostInfo;
+  mach_msg_type_number_t hostCount = HOST_BASIC_INFO_COUNT;
+  
+  kr = host_info(host_port, HOST_BASIC_INFO,
+                  (host_info_t)&hostInfo, &hostCount);
+  
+  if (kr == KERN_SUCCESS) {
+    totalMemoryBytes = static_cast<double>(hostInfo.max_mem);
   }
-
-  // malloc_size is per-allocation; use resident_size as native heap proxy
-  nativeHeapBytes = residentBytes;
+  
+  availableBytes = totalMemoryBytes - usedMemoryBytes;
+  if (availableBytes < 0) availableBytes = 0;
+  
+  // Low memory threshold (~200MB available)
+  isLowMemory = (totalMemoryBytes > 0) && (availableBytes < 200.0 * 1024.0 * 1024.0);
 #endif
-
-#ifdef __ANDROID__
-  // Parse /proc/self/status for VmRSS (resident set size)
-  std::ifstream statusFile("/proc/self/status");
-  if (statusFile.is_open()) {
-    std::string line;
-    while (std::getline(statusFile, line)) {
-      if (line.rfind("VmRSS:", 0) == 0) {
-        // Format: "VmRSS:    123456 kB"
-        std::istringstream iss(line.substr(6));
-        double kbValue = 0;
-        iss >> kbValue;
-        residentBytes = kbValue * 1024.0;
-        break;
-      }
-    }
-  }
-
-  // Use mallinfo for native heap
-  struct mallinfo mi = mallinfo();
-  nativeHeapBytes = static_cast<double>(mi.uordblks); // total allocated space
-
-  // Parse /proc/meminfo for available memory
-  std::ifstream memFile("/proc/meminfo");
-  if (memFile.is_open()) {
-    std::string line;
-    while (std::getline(memFile, line)) {
-      if (line.rfind("MemAvailable:", 0) == 0) {
-        std::istringstream iss(line.substr(13));
-        double kbValue = 0;
-        iss >> kbValue;
-        availableMemoryBytes = kbValue * 1024.0;
-        break;
-      }
-    }
-  }
-
-  // Consider low if available < 256MB
-  isLowMemory = availableMemoryBytes > 0 && availableMemoryBytes < 256.0 * 1024 * 1024;
-#endif
-
-  return MemoryUsage{nativeHeapBytes, residentBytes, availableMemoryBytes, isLowMemory};
+  
+  return MemoryUsage{
+    usedMemoryBytes,          // nativeHeapBytes
+    usedMemoryBytes,          // residentBytes  
+    availableBytes,           // availableMemoryBytes
+    isLowMemory               // isLowMemory
+  };
 }
 
-//------------------------------------------------------------------------------
-// close - Release all native resources
-//------------------------------------------------------------------------------
+// =============================================================================
+// close — Clean up all LiteRT-LM resources
+// =============================================================================
+
 void HybridLiteRTLM::close() {
-  std::lock_guard<std::mutex> lock(mutex_);
-  
-#ifdef LITERT_LM_ENABLED
-  // Release in reverse order of creation
-  conversation_.reset();
-  engine_.reset();
-#endif
+  // Note: Don't lock here if called from destructor (mutex may be destroyed)
+  // The caller (loadModel, destructor) should handle locking.
   
   isLoaded_ = false;
   history_.clear();
+  
+#ifdef __APPLE__
+  if (conversation_) {
+    litert_lm_conversation_delete(conversation_);
+    conversation_ = nullptr;
+  }
+  if (conv_config_) {
+    litert_lm_conversation_config_delete(conv_config_);
+    conv_config_ = nullptr;
+  }
+  if (session_config_) {
+    litert_lm_session_config_delete(session_config_);
+    session_config_ = nullptr;
+  }
+  if (engine_) {
+    litert_lm_engine_delete(engine_);
+    engine_ = nullptr;
+  }
+#endif
+  
+  lastStats_ = GenerationStats{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 }
 
 } // namespace margelo::nitro::litertlm

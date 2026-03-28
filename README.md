@@ -1,23 +1,19 @@
 # react-native-litert-lm
 
-High-performance LLM inference for React Native powered by [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM) and [Nitro Module](https://github.com/mrousavy/nitro). Optimized for **Gemma 3n** and other on-device language models.
+High-performance on-device LLM inference for React Native, powered by [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM) and [Nitro Modules](https://github.com/mrousavy/nitro). Optimized for **Gemma 3n** and other on-device language models.
 
 ## Features
 
-- 🚀 **Native Performance** - Kotlin (Android) / C++ (iOS) implementation via Nitro Modules
-- 🧠 **Gemma 3n Ready** - First-class support for Gemma 3n E2B/E4B models
-- ⚡ **GPU Acceleration** - GPU delegate (Android), Metal (iOS when available)
-- 📦 **Bundled Tokenizer** - No separate tokenization library needed
-- 🔄 **Streaming Support** - Token-by-token generation callbacks
-- 📱 **Cross-Platform** - Android API 26+
-- 🖼️ **Multimodal** - Image and audio input support (Android Beta, iOS coming soon)
-- 🧵 **Async API** - Non-blocking inference to prevent UI freezes
-- 📊 **Real Memory Tracking** - OS-level memory metrics (RSS, native heap, available memory) via native APIs
-- 🧮 **Zero-Copy Buffers** - Memory snapshots stored in native ArrayBuffers via `NitroModules.createNativeArrayBuffer()` (v0.35+)
-
-## Status
-
-> ⚠️ **Early Preview**: This library is under active development. Android is functional with enough RAM, iOS implementation pending LiteRT-LM iOS release. Please report any issues on the [GitHub issues](https://github.com/hung-yueh/react-native-litert-lm/issues).
+- 🚀 **Native Performance** — Kotlin (Android) / C++ (iOS) via Nitro Modules JSI bindings
+- 🧠 **Gemma 3n Ready** — First-class support for Gemma 3n E2B/E4B models
+- ⚡ **GPU Acceleration** — GPU delegate (Android), Metal/MPS (iOS)
+- 🔄 **Streaming Support** — Token-by-token generation callbacks
+- 📱 **Cross-Platform** — Android API 26+ / iOS 15.0+
+- 🖼️ **Multimodal** — Image and audio input support (Android)
+- 🧵 **Async API** — Non-blocking inference on background threads
+- 📊 **Real Memory Tracking** — OS-level memory metrics (RSS, native heap, available memory) via native APIs
+- 🧮 **Zero-Copy Buffers** — Memory snapshots stored in native ArrayBuffers via Nitro Modules
+- 📥 **Automatic Model Download** — Downloads models from URL with progress tracking and local caching
 
 ## Installation
 
@@ -44,69 +40,88 @@ Then create a development build:
 
 ```bash
 npx expo prebuild
-npx expo run:android
+npx expo run:android  # Android
+npx expo run:ios      # iOS
 ```
 
-> **Note**: Only ARM devices are supported (physical devices or ARM emulators). x86_64 emulators are not supported.
+> **Note**: Only ARM devices/simulators are supported. x86_64 Android emulators are not supported.
 
 ### Bare React Native
 
 ```bash
+# Android
 cd android && ./gradlew clean
-cd ios && pod install  # iOS coming soon
+
+# iOS
+cd ios && pod install
 ```
 
 ## Example App
 
-The repository includes a fully functional example app in the `example/` directory with a dark-themed diagnostic UI that demonstrates model loading, inference, memory tracking, and performance stats.
+The `example/` directory contains a fully functional test app with a dark-themed diagnostic UI that demonstrates:
 
-To run it:
+- Model downloading with progress tracking
+- Text inference (blocking and streaming)
+- Multi-turn conversation with context retention
+- Performance benchmarking (tokens/sec, latency)
+- Real-time memory tracking
+- Quick chat interface
 
-1.  **Build the library** (compiles TypeScript to `lib/`):
+### Running the Example
 
-    ```bash
-    npm run build
-    ```
+1. **Build the library** (compiles TypeScript to `lib/`):
 
-2.  **Navigate to the example directory and install dependencies:**
+   ```bash
+   npm run build
+   ```
 
-    ```bash
-    cd example
-    npm install
-    ```
+2. **Install example dependencies:**
 
-3.  **Create a development build and run on Android:**
-    ```bash
-    npx expo prebuild --clean
-    npx expo run:android
-    ```
+   ```bash
+   cd example
+   npm install
+   ```
 
-> **Note:** If you change native code (C++/Kotlin), you must run `npx expo prebuild --clean` again.
+3. **Create a development build and run:**
+
+   ```bash
+   npx expo prebuild --clean
+   npx expo run:android  # Android
+   npx expo run:ios      # iOS (requires XCFramework — see "Building the iOS Engine" below)
+   ```
+
+> **Note:** If you change native code (C++/Kotlin/Obj-C++), you must run `npx expo prebuild --clean` again before rebuilding.
 
 ## Model Management
 
-LiteRT-LM models (like Gemma 3n) are large files (3GB+) and cannot be bundled directly into your app's binary. You must download them at runtime to a writable directory (e.g., `DocumentDirectory`).
+LiteRT-LM models (like Gemma 3n) are large files (3 GB+) and cannot be bundled into your app binary. They are downloaded at runtime.
 
 ### Automatic Downloading
 
-The library supports automatic downloading when you pass a URL to `loadModel` or `useModel`.
+The library handles downloading automatically when you pass a URL to `loadModel` or `useModel`. Downloads include:
+
+- **Progress tracking** — real-time download percentage via callbacks
+- **Local caching** — downloaded models are cached and reused across app launches
+  - **Android**: app-local temp directory
+  - **iOS**: `Library/Caches/litert_models/` (survives app relaunch; reclaimable by iOS under storage pressure)
+- **HTTPS enforcement** — only secure URLs are accepted
 
 ### Manual Downloading (Optional)
 
-If you prefer to manage downloads manually (e.g., using `rn-fetch-blob` or `expo-file-system`), you can download the file to a local path and pass that path to the library.
+If you prefer to manage downloads yourself (e.g., using `expo-file-system`), download the `.litertlm` file to a local path and pass that path to the library:
 
 ```typescript
-import { FileSystem } from "react-native-file-access";
-// or import * as FileSystem from 'expo-file-system';
+import * as FileSystem from "expo-file-system";
 
 const MODEL_URL =
   "https://huggingface.co/litert-community/gemma-3n-2b-it/resolve/main/model.litertlm";
-const localPath = `${FileSystem.DocumentDirectoryPath}/gemma-3n.litertlm`;
+const localPath = `${FileSystem.documentDirectory}gemma-3n.litertlm`;
 
 async function downloadModel() {
-  if (await FileSystem.exists(localPath)) return localPath;
+  const info = await FileSystem.getInfoAsync(localPath);
+  if (info.exists) return localPath;
 
-  // Download logic here...
+  await FileSystem.downloadAsync(MODEL_URL, localPath);
   return localPath;
 }
 ```
@@ -115,26 +130,27 @@ async function downloadModel() {
 
 ### React Hook (Recommended)
 
-The `useModel` hook manages the model lifecycle, including downloading, loading, and unloading.
+The `useModel` hook manages the full model lifecycle: downloading, loading, inference, and cleanup.
 
 ```typescript
 import { useModel, GEMMA_3N_E2B_IT_INT4 } from "react-native-litert-lm";
+import { Platform } from "react-native";
 
 function App() {
   const {
     model,
     isReady,
     downloadProgress,
-    load,   // Manually trigger load
-    deleteModel // Delete model file
-  } = useModel(
-    GEMMA_3N_E2B_IT_INT4,
-    {
-      backend: "cpu",
-      autoLoad: true, // Default: true. Set false to load manually.
-      systemPrompt: "You are a helpful assistant."
-    }
-  );
+    error,
+    load,          // Manually trigger load
+    deleteModel,   // Delete cached model file
+    memorySummary, // Auto-updated memory stats (if tracking enabled)
+  } = useModel(GEMMA_3N_E2B_IT_INT4, {
+    backend: Platform.OS === 'ios' ? 'gpu' : 'cpu',
+    autoLoad: true, // Default: true. Set false to load manually via load().
+    systemPrompt: "You are a helpful assistant.",
+    enableMemoryTracking: true,
+  });
 
   if (!isReady) {
     return <Text>Loading... {Math.round(downloadProgress * 100)}%</Text>;
@@ -162,7 +178,7 @@ await llm.loadModel("https://example.com/model.litertlm", {
   systemPrompt: "You are a helpful assistant.",
 });
 
-// Generate response (async)
+// Generate a response
 const response = await llm.sendMessage("What is the capital of France?");
 console.log(response);
 
@@ -179,15 +195,16 @@ llm.sendMessageAsync("Tell me a story", (token, done) => {
 });
 ```
 
-### Multimodal (Image/Audio)
+### Multimodal (Image / Audio)
+
+> **Note**: Multimodal is fully supported on Android. iOS has the code paths implemented but vision/audio executors may not be available in the current XCFramework build — use `checkMultimodalSupport()` to verify at runtime.
 
 ```typescript
 import { checkMultimodalSupport } from "react-native-litert-lm";
 
-// Check platform support first
-const error = checkMultimodalSupport();
-if (error) {
-  console.warn(error); // iOS not yet supported
+const warning = checkMultimodalSupport();
+if (warning) {
+  console.warn(warning); // Experimental on iOS
 } else {
   // Image input (for vision models like Gemma 3n)
   // Images >1024px are automatically resized to prevent OOM
@@ -196,7 +213,7 @@ if (error) {
     "/path/to/image.jpg",
   );
 
-  // Audio input (for audio models)
+  // Audio input
   const transcription = await llm.sendMessageWithAudio(
     "Transcribe this audio",
     "/path/to/audio.wav",
@@ -204,58 +221,59 @@ if (error) {
 }
 ```
 
-### Check Performance
+### Performance Stats
 
 ```typescript
 const stats = llm.getStats();
 console.log(`Generated ${stats.completionTokens} tokens`);
 console.log(`Speed: ${stats.tokensPerSecond.toFixed(1)} tokens/sec`);
+console.log(`Time to first token: ${stats.timeToFirstToken.toFixed(0)} ms`);
 ```
 
 ### Memory Tracking
 
-The library provides real OS-level memory usage data. You can query memory at any time, or enable automatic tracking to record snapshots after each inference call.
+The library provides real OS-level memory data — no estimation. It reads directly from `mach_task_basic_info` (iOS) and `Debug.getNativeHeapAllocatedSize()` + `/proc/self/status` (Android).
 
 #### Direct Memory Query
 
 ```typescript
-// Get a single real-time snapshot from native APIs
 const usage = llm.getMemoryUsage();
-console.log(`Native heap: ${(usage.nativeHeapBytes / 1024 / 1024).toFixed(1)} MB`);
+console.log(
+  `Native heap: ${(usage.nativeHeapBytes / 1024 / 1024).toFixed(1)} MB`,
+);
 console.log(`RSS: ${(usage.residentBytes / 1024 / 1024).toFixed(1)} MB`);
-console.log(`Available: ${(usage.availableMemoryBytes / 1024 / 1024).toFixed(1)} MB`);
+console.log(
+  `Available: ${(usage.availableMemoryBytes / 1024 / 1024).toFixed(1)} MB`,
+);
 console.log(`Low memory: ${usage.isLowMemory}`);
 ```
 
 #### Automatic Tracking with Native Buffers
 
-Enable memory tracking to automatically record snapshots in a native-backed `ArrayBuffer` (allocated via `NitroModules.createNativeArrayBuffer()`) after every inference call:
+Enable memory tracking to automatically record snapshots in a native-backed `ArrayBuffer` after every inference call:
 
 ```typescript
-import { createLLM } from 'react-native-litert-lm';
-
 const llm = createLLM({
   enableMemoryTracking: true,
-  maxMemorySnapshots: 256, // default
+  maxMemorySnapshots: 256,
 });
 
-await llm.loadModel('/path/to/model.litertlm', { backend: 'cpu' });
-await llm.sendMessage('Hello!');
+await llm.loadModel("/path/to/model.litertlm", { backend: "cpu" });
+await llm.sendMessage("Hello!");
 
-// Review tracked data
 const summary = llm.memoryTracker!.getSummary();
-console.log(`Peak RSS: ${(summary.peakResidentBytes / 1024 / 1024).toFixed(1)} MB`);
-console.log(`Peak Native Heap: ${(summary.peakNativeHeapBytes / 1024 / 1024).toFixed(1)} MB`);
-console.log(`RSS Delta: ${(summary.residentDeltaBytes / 1024 / 1024).toFixed(1)} MB`);
-console.log(`Snapshots: ${summary.snapshotCount}`);
+console.log(
+  `Peak RSS: ${(summary.peakResidentBytes / 1024 / 1024).toFixed(1)} MB`,
+);
+console.log(
+  `RSS Delta: ${(summary.residentDeltaBytes / 1024 / 1024).toFixed(1)} MB`,
+);
 ```
 
-#### Using the `useModel` Hook with Memory Tracking
+#### Using `useModel` with Memory Tracking
 
 ```typescript
-import { useModel } from 'react-native-litert-lm';
-
-const { model, isReady, memorySummary, memoryTracker } = useModel(modelUrl, {
+const { model, isReady, memorySummary } = useModel(modelUrl, {
   enableMemoryTracking: true,
   maxMemorySnapshots: 100,
 });
@@ -270,12 +288,13 @@ if (memorySummary) {
 #### Standalone Memory Tracker
 
 ```typescript
-import { createMemoryTracker, createNativeBuffer } from 'react-native-litert-lm';
+import {
+  createMemoryTracker,
+  createNativeBuffer,
+} from "react-native-litert-lm";
 
-// Create a tracker backed by a native ArrayBuffer
 const tracker = createMemoryTracker(100);
 
-// Manually record snapshots
 tracker.record({
   timestamp: Date.now(),
   nativeHeapBytes: 50_000_000,
@@ -283,195 +302,260 @@ tracker.record({
   availableMemoryBytes: 4_000_000_000,
 });
 
-// Access the underlying native buffer (for zero-copy transfer to native code)
+// Access the underlying native buffer (zero-copy transfer to native code)
 const buffer = tracker.getNativeBuffer();
-
-// Create a standalone native buffer for custom use
-const customBuffer = createNativeBuffer(1024);
 ```
 
 ## Supported Models
 
-Download `.litertlm` models automatically using the exported constants or from [HuggingFace](https://huggingface.co/litert-community):
+Download `.litertlm` models automatically using the exported URL constants, or manually from [HuggingFace](https://huggingface.co/litert-community):
 
-| Model Constant         | Description                            | Size | Min Device RAM |
-| :--------------------- | :------------------------------------- | :--- | :------------- |
-| `GEMMA_3N_E2B_IT_INT4` | Gemma 3n E2B (Instruction Tuned, Int4) | ~3GB | 4GB+           |
+| Constant               | Model                                  | Size  | Min RAM |
+| :--------------------- | :------------------------------------- | :---- | :------ |
+| `GEMMA_3N_E2B_IT_INT4` | Gemma 3n E2B (Instruction Tuned, Int4) | ~3 GB | 4 GB+   |
 
-| Other Models  | Size   | Min Device RAM | Use Case              |
-| ------------- | ------ | -------------- | --------------------- |
-| Gemma 3n E4B  | ~4GB   | 8GB+           | Higher quality        |
-| Gemma 3 1B    | ~1GB   | 4GB+           | Smallest, fastest     |
-| Phi-4 Mini    | ~2GB   | 4GB+           | Microsoft's small LLM |
-| Qwen 2.5 1.5B | ~1.5GB | 4GB+           | Multilingual          |
+**Other compatible models** (download manually from HuggingFace):
+
+| Model         | Size    | Min RAM | Notes                 |
+| ------------- | ------- | ------- | --------------------- |
+| Gemma 3n E4B  | ~4 GB   | 8 GB+   | Higher quality        |
+| Gemma 3 1B    | ~1 GB   | 4 GB+   | Smallest, fastest     |
+| Phi-4 Mini    | ~2 GB   | 4 GB+   | Microsoft's small LLM |
+| Qwen 2.5 1.5B | ~1.5 GB | 4 GB+   | Multilingual          |
 
 ## API Reference
 
-### `createLLM(): LiteRTLM`
+### `createLLM(options?): LiteRTLM`
 
 Creates a new LLM inference engine instance.
 
+- `options.enableMemoryTracking` — enable automatic memory snapshot recording
+- `options.maxMemorySnapshots` — max number of snapshots to retain (default: 256)
+
 ### `loadModel(path, config?): Promise<void>`
 
-- `path: string` - Absolute path to `.litertlm` file OR a public URL (http/https). If a URL is provided, the model will be downloaded automatically.
-- `config.systemPrompt` - System prompt to guide model behavior (e.g., "You are a helpful assistant.")
-- `config.backend` - `'cpu'` | `'gpu'` | `'npu'` (default: `'gpu'`)
-- `config.temperature` - Sampling temperature (default: 0.7)
-- `config.topK` - Top-K sampling (default: 40)
-- `config.maxTokens` - Max generation length (default: 1024)
+Loads a model from a local path or HTTPS URL.
 
-> **Note**: Vision encoder is always set to GPU (required by Gemma 3n). Audio encoder is always set to CPU (optimal for audio).
+| Parameter             | Type     | Default | Description                               |
+| --------------------- | -------- | ------- | ----------------------------------------- |
+| `path`                | `string` | —       | Absolute path to `.litertlm` or HTTPS URL |
+| `config.backend`      | `string` | `'gpu'` | `'cpu'`, `'gpu'`, or `'npu'`              |
+| `config.systemPrompt` | `string` | —       | System prompt for the model               |
+| `config.temperature`  | `number` | `0.7`   | Sampling temperature                      |
+| `config.topK`         | `number` | `40`    | Top-K sampling                            |
+| `config.topP`         | `number` | `0.95`  | Top-P (nucleus) sampling                  |
+| `config.maxTokens`    | `number` | `1024`  | Maximum generation length                 |
 
 #### Backend Options
 
-| Backend | Description       | Speed   | Compatibility                              |
-| ------- | ----------------- | ------- | ------------------------------------------ |
-| `'cpu'` | CPU inference     | Slowest | Always available with less RAM requirement |
-| `'gpu'` | GPU acceleration  | Fast    | Recommended default                        |
-| `'npu'` | NPU/Neural Engine | Fastest | Requires supported hardware                |
+| Backend | Engine              | Speed   | Notes                                          |
+| ------- | ------------------- | ------- | ---------------------------------------------- |
+| `'cpu'` | CPU inference       | Slowest | Always available, lower RAM requirement        |
+| `'gpu'` | GPU / Metal         | Fast    | Recommended default                            |
+| `'npu'` | NPU / Neural Engine | Fastest | Requires supported hardware; falls back to GPU |
 
-> ⚠️ **NPU Note**: NPU acceleration requires compatible hardware (Qualcomm Hexagon, MediaTek APU, etc.). If unavailable, LiteRT-LM automatically falls back to GPU.
+> **iOS**: `'gpu'` uses Metal/MPS and is the recommended backend. The engine automatically tries multiple backend combinations if the primary one fails.
 
 ### `sendMessage(message): Promise<string>`
 
-Blocking generation (executed on background thread). Returns complete response.
+Runs inference synchronously on a background thread. Returns the complete response.
 
 ### `sendMessageAsync(message, callback)`
 
-Streaming generation. Callback receives `(token, isDone)`.
+Streaming generation. Callback signature: `(token: string, isDone: boolean) => void`.
 
 ### `sendMessageWithImage(message, imagePath): Promise<string>`
 
-Send a message with an image attachment (for vision models).
+Send a message with an image (Android only; for vision models like Gemma 3n).
 
 ### `sendMessageWithAudio(message, audioPath): Promise<string>`
 
-Send a message with an audio attachment (for audio models).
+Send a message with audio (Android only).
+
+### `getStats(): GenerationStats`
+
+Returns performance metrics from the last inference call.
+
+```typescript
+interface GenerationStats {
+  tokensPerSecond: number;
+  totalTime: number; // seconds
+  timeToFirstToken: number; // seconds
+  promptTokens: number;
+  completionTokens: number;
+  prefillSpeed: number; // tokens/sec
+}
+```
 
 ### `getMemoryUsage(): MemoryUsage`
 
-Returns real OS-level memory usage statistics from native APIs. No estimation — reads directly from `mach_task_basic_info` (iOS) / `Debug.getNativeHeapAllocatedSize()` + `/proc/self/status` (Android).
+Returns real OS-level memory usage.
 
 ```typescript
 interface MemoryUsage {
-  nativeHeapBytes: number;      // Native heap allocated bytes
-  residentBytes: number;        // Process RSS in bytes
-  availableMemoryBytes: number; // Available system memory in bytes
-  isLowMemory: boolean;         // Whether the system considers memory low
+  nativeHeapBytes: number;
+  residentBytes: number;
+  availableMemoryBytes: number;
+  isLowMemory: boolean;
 }
 ```
 
 ### `getHistory(): Message[]`
 
-Get conversation history.
+Returns the conversation history.
 
 ### `resetConversation()`
 
-Clear context and start fresh.
+Clears conversation context and starts a fresh session.
 
 ### `close()`
 
-Release all native resources.
+Releases all native resources. Call when the model is no longer needed.
 
 ### `deleteModel(fileName): Promise<void>`
 
-Deletes a model file from the app's internal storage and cleans up the engine instance.
+Deletes a cached model file from the app's local storage.
 
-### `getRecommendedBackend(): Backend`
-
-Returns the recommended backend for the current platform (usually `'gpu'`).
-
-### `checkBackendSupport(backend): string | undefined`
-
-Returns a warning message if the specified backend may have issues on the current platform, or `undefined` if OK.
-
-```typescript
-import { checkBackendSupport } from "react-native-litert-lm";
-
-const warning = checkBackendSupport("npu");
-if (warning) {
-  console.warn(warning);
-}
-```
-
-### `checkMultimodalSupport(): string | undefined`
-
-Returns an error message if multimodal (image/audio) is not supported on the current platform, or `undefined` if OK.
-
-```typescript
-import { checkMultimodalSupport } from "react-native-litert-lm";
-
-const error = checkMultimodalSupport();
-if (error) {
-  console.warn(error); // iOS multimodal not yet supported
-}
-```
-
-### Prompt Templates
-
-For advanced use cases where you need to manually format prompts:
+### Utility Functions
 
 ```typescript
 import {
+  checkBackendSupport,
+  checkMultimodalSupport,
+  getRecommendedBackend,
   applyGemmaTemplate,
   applyPhiTemplate,
   applyLlamaTemplate,
-  ChatMessage,
 } from "react-native-litert-lm";
 
-const history: ChatMessage[] = [
-  { role: "user", content: "Hello!" },
-  { role: "model", content: "Hi there!" },
-  { role: "user", content: "Tell me a joke" },
-];
+// Check if a backend is supported
+const warning = checkBackendSupport("npu"); // string | undefined
+const mmError = checkMultimodalSupport(); // string | undefined
+const backend = getRecommendedBackend(); // 'gpu' | 'cpu'
 
-// For Gemma models
-const gemmaPrompt = applyGemmaTemplate(history, "You are a comedian.");
-
-// For Phi models
-const phiPrompt = applyPhiTemplate(history);
-
-// For Llama models
-const llamaPrompt = applyLlamaTemplate(history, "You are helpful.");
+// Manual prompt formatting (advanced)
+const prompt = applyGemmaTemplate(
+  [{ role: "user", content: "Hello!" }],
+  "You are helpful.",
+);
 ```
 
 ## Requirements
 
-- React Native 0.76+
-- react-native-nitro-modules **0.35.0+** (required for `createNativeArrayBuffer` and memory tracking)
-- Android API 26+ (ARM64 only)
-- **LiteRT-LM Android SDK**: `0.9.0-alpha01` (bundled automatically)
-- iOS 15.0+ (coming soon)
+| Dependency                 | Version       |
+| -------------------------- | ------------- |
+| React Native               | 0.76+         |
+| react-native-nitro-modules | 0.35.0+       |
+| Android API                | 26+ (ARM64)   |
+| iOS                        | 15.0+ (ARM64) |
+| LiteRT-LM Android SDK      | 0.9.0-alpha01 |
+| LiteRT-LM iOS Engine       | v0.9.0        |
 
 ## Platform Support
 
-| Platform | Status   | Architecture |
-| -------- | -------- | ------------ |
-| Android  | ✅ Ready | arm64-v8a    |
-| iOS      | 🚧 Stub  | -            |
+| Platform | Status   | Architecture | Backends         |
+| -------- | -------- | ------------ | ---------------- |
+| Android  | ✅ Ready | arm64-v8a    | CPU, GPU, NPU    |
+| iOS      | ✅ Ready | arm64        | CPU, GPU (Metal) |
+
+### iOS Feature Matrix
+
+| Feature                      | Status | Notes                                                 |
+| ---------------------------- | ------ | ----------------------------------------------------- |
+| Text inference (blocking)    | ✅     | Via LiteRT-LM C API                                   |
+| Text inference (streaming)   | ✅     | Token-by-token callbacks                              |
+| GPU inference (Metal/MPS)    | ✅     | Recommended backend                                   |
+| Model download with progress | ✅     | NSURLSession, cached in `Caches/`                     |
+| Memory tracking              | ✅     | `mach_task_basic_info`                                |
+| Multi-turn conversation      | ✅     | Context retained across turns                         |
+| Multimodal (image/audio)     | 🧪     | Code paths exist; vision/audio executors experimental |
+| Constrained decoding         | ❌     | Requires llguidance Rust runtime                      |
+| Function calling             | ❌     | Requires Rust CXX bridge runtime                      |
+
+## Building the iOS Engine
+
+The iOS build uses a **Bazel-to-XCFramework pipeline** that compiles the LiteRT-LM C engine and all transitive dependencies into a static library (~83 MB).
+
+### Prerequisites
+
+- **Bazel 7.6.1+** (via [Bazelisk](https://github.com/bazelbuild/bazelisk) recommended)
+- **Xcode command line tools** (`xcode-select --install`)
+
+### Build
+
+```bash
+./scripts/build-ios-engine.sh
+```
+
+This will:
+
+1. Clone/checkout LiteRT-LM `v0.9.0` source into `.litert-lm-build/`
+2. Build `//c:engine` for `ios_arm64` and `ios_sim_arm64` via Bazel
+3. Collect all transitive `.o` files (engine, protobuf, re2, sentencepiece, etc.)
+4. Compile C/C++ stubs for unavailable Rust dependencies
+5. Patch `PromptTemplate` to use a simplified template engine (no Rust MinijinjaTemplate)
+6. Merge ~1,900 object files into a static library via `libtool`
+7. Package into `ios/Frameworks/LiteRTLM.xcframework`
+
+### Output
+
+```
+ios/Frameworks/LiteRTLM.xcframework/
+├── Info.plist
+├── ios-arm64/LiteRTLM.framework/              # Device
+│   ├── LiteRTLM                                # ~81 MB static library
+│   └── Headers/litert_lm_engine.h
+└── ios-arm64-simulator/LiteRTLM.framework/    # Simulator
+    ├── LiteRTLM                                # ~83 MB static library
+    └── Headers/litert_lm_engine.h
+```
+
+### FFI Stubs
+
+Certain LiteRT-LM features depend on Rust libraries (llguidance, CXX bridge, MinijinjaTemplate) that are not available in the iOS Bazel build. These are replaced with stubs:
+
+| Stub File                            | Location         | Purpose                                  |
+| ------------------------------------ | ---------------- | ---------------------------------------- |
+| `cxx_bridge_stubs.cc`                | `scripts/stubs/` | CXX bridge runtime + Rust FFI type stubs |
+| `llguidance_stubs.c`                 | `scripts/stubs/` | llguidance constrained decoding C API    |
+| `gemma_model_constraint_provider.cc` | `scripts/stubs/` | Gemma constraint provider factory        |
+
+Additionally, `PromptTemplate` is patched at build time to use a simplified C++ template formatter instead of the Rust MinijinjaTemplate, which avoids all Rust FFI calls during conversation setup.
+
+> **Text inference works fully without these Rust components.** Only constrained decoding, function calling parsers, and advanced Jinja2 template features are affected.
 
 ## Architecture
 
-This library uses a split implementation strategy to maximize performance and compatibility:
+```
+┌─────────────────────────────────────────────────┐
+│  React Native (TypeScript)                      │
+│  useModel() / createLLM() / sendMessage()       │
+├─────────────────────────────────────────────────┤
+│  Nitro Modules JSI Bridge                       │
+├──────────────────────┬──────────────────────────┤
+│  Android (Kotlin)    │  iOS (C++)               │
+│  HybridLiteRTLM.kt   │  HybridLiteRTLM.cpp      │
+│  litertlm-android    │  LiteRTLM C API          │
+│  AAR (GPU delegate)  │  XCFramework (Metal)     │
+└──────────────────────┴──────────────────────────┘
+```
 
-- **Android**: Uses **Kotlin** (`HybridLiteRTLM.kt`) to interface directly with the `litertlm-android` AAR.
-- **iOS**: Uses **C++** (`HybridLiteRTLM.cpp`) which will interface with the LiteRT-LM C++ headers (once released).
+- **Android**: Kotlin (`HybridLiteRTLM.kt`) interfacing with the `litertlm-android` AAR.
+- **iOS**: C++ (`HybridLiteRTLM.cpp`) interfacing with the LiteRT-LM C API via a prebuilt `LiteRTLM.xcframework`. Platform-specific code (model downloading, file management) is in Objective-C++ (`ios/IOSDownloadHelper.mm`).
 
-> **Note for Contributors**: Changes made to the C++ implementation (`cpp/`) **do not** affect Android. You must apply feature changes to both the Kotlin and C++ implementations.
+> **For contributors**: Changes to `cpp/HybridLiteRTLM.cpp` do not affect Android. Feature changes must be applied to both the Kotlin and C++ implementations.
 
 ## License
 
 The code in this repository is licensed under the **[MIT License](LICENSE)**.
 
-### ⚠️ Important AI Model Disclaimer
+### ⚠️ AI Model Disclaimer
 
-This library acts as an execution engine for On-Device Large Language Models (LLMs). The AI models themselves are **not** distributed with this package and are **not** covered by the MIT license.
-
-By downloading and running these models within your app, you agree to comply with their respective licenses and acceptable use policies:
+This library is an execution engine for on-device LLMs. The AI models themselves are **not** distributed with this package and have their own licenses:
 
 - **Gemma (Google)**: [Gemma Terms of Use](https://ai.google.dev/gemma/terms)
 - **Llama 3 (Meta)**: [Llama 3.2 Community License](https://www.llama.com/llama3/license/)
-- **Qwen (Alibaba)**: [Apache 2.0 License](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct/blob/main/LICENSE)
+- **Qwen (Alibaba)**: [Apache 2.0](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct/blob/main/LICENSE)
 - **Phi (Microsoft)**: [MIT License](https://huggingface.co/microsoft/Phi-3.5-mini-instruct/blob/main/LICENSE)
 
-_The author of `react-native-litert-lm` takes no responsibility for the outputs generated by these models or the applications built using them._
+By downloading and using these models, you agree to their respective licenses and acceptable use policies. The author of `react-native-litert-lm` takes no responsibility for model outputs or applications built with them.

@@ -5,12 +5,14 @@
     "requireCleanWorkingDir": true
   },
   "github": {
-    "release": true
+    "release": true,
+    "assets": ["LiteRTLM-ios-frameworks.zip"]
   },
   "npm": {
     "publish": true
   },
   "hooks": {
-    "after:bump": "echo Updated package.json to ${version}"
+    "before:init": "npm run build",
+    "after:bump": "scripts/download-ios-frameworks.sh"
   }
 }

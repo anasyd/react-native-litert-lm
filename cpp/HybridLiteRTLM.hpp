@@ -14,11 +14,9 @@
 
 #include "../nitrogen/generated/shared/c++/HybridLiteRTLMSpec.hpp"
 
-// LiteRT-LM headers (conditionally included when available via Prefab/CMake)
-#ifdef LITERT_LM_ENABLED
-#include "litert/lm/engine.h"
-#include "litert/lm/conversation.h"
-#include "litert/lm/types.h"
+// LiteRT-LM C API (iOS uses prebuilt framework with C ABI)
+#ifdef __APPLE__
+#include "include/litert_lm_engine.h"
 #endif
 
 // Memory usage headers
@@ -37,14 +35,15 @@
 #include <memory>
 #include <mutex>
 #include <functional>
+#include <atomic>
 
 namespace margelo::nitro::litertlm {
 
 /**
  * HybridLiteRTLM: React Native bindings for LiteRT-LM.
  * 
- * Wraps LiteRT-LM's Engine and Conversation classes to provide
- * high-level LLM inference with GPU acceleration.
+ * On iOS, wraps the LiteRT-LM C API (engine.h) with prebuilt framework.
+ * On Android, this class is unused — the Kotlin implementation is used instead.
  */
 class HybridLiteRTLM : public HybridLiteRTLMSpec {
 public:
@@ -61,24 +60,26 @@ public:
 public:
   // HybridLiteRTLMSpec interface implementation
   
-  void loadModel(const std::string& modelPath, 
+  std::shared_ptr<Promise<void>> loadModel(const std::string& modelPath, 
                  const std::optional<LLMConfig>& config) override;
   
-  std::string sendMessage(const std::string& message) override;
+  std::shared_ptr<Promise<std::string>> sendMessage(const std::string& message) override;
   
-  std::string sendMessageWithImage(const std::string& message,
+  std::shared_ptr<Promise<std::string>> sendMessageWithImage(const std::string& message,
                                    const std::string& imagePath) override;
 
-  std::future<std::string> downloadModel(const std::string& url, 
+  std::shared_ptr<Promise<std::string>> downloadModel(const std::string& url, 
                                          const std::string& fileName,
                                          const std::optional<std::function<void(double)>>& onProgress) override;
   
-  std::string sendMessageWithAudio(const std::string& message,
+  std::shared_ptr<Promise<void>> deleteModel(const std::string& fileName) override;
+  
+  std::shared_ptr<Promise<std::string>> sendMessageWithAudio(const std::string& message,
                                    const std::string& audioPath) override;
   
   void sendMessageAsync(
     const std::string& message,
-    const std::function<void(std::string, bool)>& onToken
+    const std::function<void(const std::string&, bool)>& onToken
   ) override;
   
   std::vector<Message> getHistory() override;
@@ -94,10 +95,12 @@ public:
   void close() override;
 
 private:
-  // LiteRT-LM resources (conditionally available on Android with Prefab)
-#ifdef LITERT_LM_ENABLED
-  std::unique_ptr<litert::lm::Engine> engine_;
-  std::unique_ptr<litert::lm::Conversation> conversation_;
+  // LiteRT-LM C API resources (iOS only)
+#ifdef __APPLE__
+  LiteRtLmEngine* engine_ = nullptr;
+  LiteRtLmConversation* conversation_ = nullptr;
+  LiteRtLmConversationConfig* conv_config_ = nullptr;
+  LiteRtLmSessionConfig* session_config_ = nullptr;
 #endif
   
   // State
@@ -108,10 +111,8 @@ private:
   // Thread safety
   mutable std::mutex mutex_;
   
-  // Configuration - backends
+  // Configuration - backend
   Backend backend_ = Backend::GPU;
-  Backend visionBackend_ = Backend::GPU;  // Gemma 3n requires GPU for vision
-  Backend audioBackend_ = Backend::CPU;   // Audio typically CPU
   
   // System prompt / instruction
   std::string systemPrompt_;
@@ -129,11 +130,38 @@ private:
     }
   }
   
-  // Helper to format a message for the engine (apply chat template if needed)
-  std::string formatUserPrompt(const std::string& message) const;
-  
   // Helper to create a new conversation from existing engine
   void createNewConversation();
+  
+  // JSON helpers for building C API message payloads
+  static std::string escapeJson(const std::string& input);
+  static std::string buildTextMessageJson(const std::string& text);
+  static std::string buildImageMessageJson(const std::string& text, const std::string& imagePath);
+  static std::string buildAudioMessageJson(const std::string& text, const std::string& audioPath);
+  static std::string extractTextFromResponse(const std::string& jsonResponse);
+  
+  // Internal implementations (called from Promise lambdas)
+  void loadModelInternal(const std::string& modelPath, const std::optional<LLMConfig>& config);
+  std::string sendMessageInternal(const std::string& message);
+  std::string sendMessageWithImageInternal(const std::string& message, const std::string& imagePath);
+  std::string sendMessageWithAudioInternal(const std::string& message, const std::string& audioPath);
+  
+  // Streaming callback context (must be a plain struct for C function pointer)
+  struct StreamContext {
+    std::function<void(const std::string&, bool)> onToken;
+    std::string fullResponse;
+    std::vector<Message>* history;
+    std::mutex* historyMutex;
+    std::string userMessage;
+    GenerationStats* lastStats;
+    std::chrono::steady_clock::time_point startTime;
+    int tokenCount;
+  };
+  
+  // Static C callback for streaming (no captures needed)
+  static void streamCallbackFn(void* callback_data, const char* chunk,
+                                bool is_final, const char* error_msg);
 };
 
 } // namespace margelo::nitro::litertlm
+
