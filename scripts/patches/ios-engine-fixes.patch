@@ -1,0 +1,348 @@
+diff --git a/c/engine.cc b/c/engine.cc
+index 60ebd3f..5828db7 100644
+--- a/c/engine.cc
++++ b/c/engine.cc
+@@ -40,6 +40,13 @@
+ #include "runtime/executor/llm_executor_settings.h"
+ #include "runtime/proto/sampler_params.pb.h"
+ 
++// Thread-local storage for the last error message from C API calls.
++static thread_local std::string g_last_error;
++
++const char* litert_lm_get_last_error() {
++  return g_last_error.c_str();
++}
++
+ namespace {
+ 
+ absl::AnyInvocable<void(absl::StatusOr<litert::lm::Responses>)> CreateCallback(
+@@ -408,16 +415,23 @@ void litert_lm_engine_settings_set_prefill_chunk_size(
+   }
+ }
+ 
++extern "C" void ForceLinkEngineImpl();
++
+ LiteRtLmEngine* litert_lm_engine_create(
+     const LiteRtLmEngineSettings* settings) {
++  ForceLinkEngineImpl();
++  g_last_error.clear();
++  
+   if (!settings || !settings->settings) {
++    g_last_error = "Engine settings is null";
+     return nullptr;
+   }
+ 
+   absl::StatusOr<std::unique_ptr<Engine>> engine;
+-    engine = EngineFactory::CreateDefault(*settings->settings);
++  engine = EngineFactory::CreateDefault(*settings->settings);
+ 
+   if (!engine.ok()) {
++    g_last_error = engine.status().ToString();
+     ABSL_LOG(ERROR) << "Failed to create engine: " << engine.status();
+     return nullptr;
+   }
+@@ -693,13 +707,16 @@ void litert_lm_conversation_delete(LiteRtLmConversation* conversation) {
+ LiteRtLmJsonResponse* litert_lm_conversation_send_message(
+     LiteRtLmConversation* conversation, const char* message_json,
+     const char* extra_context) {
++  g_last_error.clear();
+   if (!conversation || !conversation->conversation) {
++    g_last_error = "Conversation is null";
+     return nullptr;
+   }
+   nlohmann::json json_message =
+       nlohmann::json::parse(message_json, /*cb=*/nullptr,
+                             /*allow_exceptions=*/false);
+   if (json_message.is_discarded()) {
++    g_last_error = "Failed to parse message JSON: " + std::string(message_json);
+     ABSL_LOG(ERROR) << "Failed to parse message JSON.";
+     return nullptr;
+   }
+@@ -709,11 +726,13 @@ LiteRtLmJsonResponse* litert_lm_conversation_send_message(
+   auto response = conversation->conversation->SendMessage(
+       json_message, std::move(optional_args));
+   if (!response.ok()) {
++    g_last_error = "SendMessage failed: " + response.status().ToString();
+     ABSL_LOG(ERROR) << "Failed to send message: " << response.status();
+     return nullptr;
+   }
+   auto* json_response = std::get_if<JsonMessage>(&*response);
+   if (!json_response) {
++    g_last_error = "Response is not a JSON message";
+     ABSL_LOG(ERROR) << "Response is not a JSON message.";
+     return nullptr;
+   }
+diff --git a/c/engine.h b/c/engine.h
+index 6bfbe7b..bcfa7f8 100644
+--- a/c/engine.h
++++ b/c/engine.h
+@@ -232,11 +232,18 @@ LITERT_LM_C_API_EXPORT
+ void litert_lm_engine_settings_set_num_decode_tokens(
+     LiteRtLmEngineSettings* settings, int num_decode_tokens);
+ 
++// Returns the last error message from a failed C API call.
++// Returns an empty string if no error has occurred.
++// The returned pointer is valid until the next C API call on the same thread.
++LITERT_LM_C_API_EXPORT
++const char* litert_lm_get_last_error();
++
+ // Creates a LiteRT LM Engine from the given settings. The caller is responsible
+ // for destroying the engine using `litert_lm_engine_delete`.
+ //
+ // @param settings The engine settings.
+ // @return A pointer to the created engine, or NULL on failure.
++//         Call litert_lm_get_last_error() for details on failure.
+ LITERT_LM_C_API_EXPORT
+ LiteRtLmEngine* litert_lm_engine_create(const LiteRtLmEngineSettings* settings);
+ 
+diff --git a/runtime/components/prompt_template.cc b/runtime/components/prompt_template.cc
+index 9e7246d..020e9c8 100644
+--- a/runtime/components/prompt_template.cc
++++ b/runtime/components/prompt_template.cc
+@@ -23,113 +23,104 @@
+ #include "absl/strings/string_view.h"  // from @com_google_absl
+ #include "absl/time/time.h"  // from @com_google_absl
+ #include "nlohmann/json.hpp"  // from @nlohmann_json
+-#include "runtime/components/rust/minijinja_template.rs.h"
+-#include "re2/re2.h"  // from @com_googlesource_code_re2
++// NOTE: We intentionally do NOT include minijinja_template.rs.h here.
++// The Rust MinijinjaTemplate is not available on iOS (only stubs exist),
++// so we implement a simplified PromptTemplate that formats messages directly
++// without Jinja2 rendering.
+ 
+ namespace litert::lm {
+-namespace {
+-
+-// Post-process the template to make it compatible with Minijinja.
+-//
+-// Minijinja is a Rust implementation of Jinja2, but it is not 100% compatible
+-// with the Python implementation. In particular, it does not support calling
+-// arbitrary Python methods on objects (e.g. `s.startswith("foo")`).
+-//
+-// This function uses regexes to rewrite common Python idioms found in
+-// tokenizer_config.json templates into Minijinja-compatible syntax.
+-std::string EditTemplateForMinijinja(absl::string_view template_content) {
+-  std::string modified_template = std::string(template_content);
+-  RE2::GlobalReplace(&modified_template, R"regex(\.startswith\((.*?)\))regex",
+-                     R"( is startingwith \1)");
+-  RE2::GlobalReplace(&modified_template, R"regex(\.endswith\((.*?)\))regex",
+-                     R"( is endingwith \1)");
+-  RE2::GlobalReplace(&modified_template,
+-                     R"regex(\.replace\((.*?),(.*?)\))regex",
+-                     R"( | replace(\1,\2))");
+-  RE2::GlobalReplace(&modified_template, R"regex(\.split\((.*?)\)\[0\])regex",
+-                     R"( | split(\1) | first)");
+-  RE2::GlobalReplace(&modified_template, R"regex(\.split\((.*?)\)\[-1\])regex",
+-                     R"( | split(\1) | last)");
+-  RE2::GlobalReplace(&modified_template, R"regex(\.split\((.*?)\))regex",
+-                     R"( | split(\1))");
+-  RE2::GlobalReplace(&modified_template, R"regex(\.join\((.*?)\))regex",
+-                     R"( | join(\1))");
+-  RE2::GlobalReplace(&modified_template, R"regex(\.[l,r]strip\(\))regex",
+-                     " | trim");
+-  RE2::GlobalReplace(&modified_template, R"regex(\.[l,r]strip\((.*?)\))regex",
+-                     R"( | trim(\1))");
+-  RE2::GlobalReplace(&modified_template, R"regex(\.items\(\))regex",
+-                     " | items");
+-  RE2::GlobalReplace(&modified_template, R"regex({% generation %})regex", "");
+-  RE2::GlobalReplace(&modified_template, R"regex({% endgeneration %})regex",
+-                     "");
+-  return modified_template;
+-}
+-
+-}  // namespace
+ 
+ using json = nlohmann::ordered_json;
+ 
++// Simple helper: format a conversation from JSON messages into a plain prompt
++// string, without relying on Jinja2 templates.
++static std::string SimpleFormatMessages(const json& messages,
++                                         const std::string& bos_token,
++                                         const std::string& eos_token,
++                                         bool add_generation_prompt) {
++  std::string result;
++  if (!bos_token.empty()) {
++    result += bos_token;
++  }
++  if (messages.is_array()) {
++    for (const auto& msg : messages) {
++      std::string role = msg.value("role", "user");
++      std::string content;
++      if (msg.contains("content")) {
++        if (msg["content"].is_string()) {
++          content = msg["content"].get<std::string>();
++        } else if (msg["content"].is_array()) {
++          // Typed content: extract text and insert media tokens
++          for (const auto& block : msg["content"]) {
++            std::string type = block.value("type", "");
++            if (type == "text") {
++              content += block.value("text", "");
++            } else if (type == "image") {
++              // Insert image placeholder token for the data processor
++              content += "\n\n<start_of_image>";
++            } else if (type == "audio") {
++              // Insert audio placeholder token for the data processor
++              content += "\n\n<start_of_audio>";
++            }
++          }
++        }
++      }
++      result += "<start_of_turn>" + role + "\n" + content + "<end_of_turn>\n";
++    }
++  }
++  if (add_generation_prompt) {
++    result += "<start_of_turn>model\n";
++  }
++  return result;
++}
++
+ PromptTemplate::PromptTemplate(absl::string_view template_content,
+                                bool edit_template_for_minijinja)
+-    : minijinja_template_(new_minijinja_template(
+-          edit_template_for_minijinja
+-              ? EditTemplateForMinijinja(template_content)
+-              : std::string(template_content))) {
+-  const auto caps = minijinja_template_->get_capabilities();
++    : template_source_(std::string(template_content)) {
++  // Set reasonable defaults for capabilities by inspecting the template source
+   capabilities_ = PromptTemplateCapabilities{
+-      .supports_tools = caps.supports_tools,
+-      .supports_tool_calls = caps.supports_tool_calls,
+-      .supports_system_role = caps.supports_system_role,
+-      .supports_parallel_tool_calls = caps.supports_parallel_tool_calls,
+-      .supports_tool_call_id = caps.supports_tool_call_id,
+-      .requires_typed_content = caps.requires_typed_content,
+-      .supports_single_turn = caps.supports_single_turn};
++      .supports_tools = (template_source_.find("tools") != std::string::npos),
++      .supports_tool_calls = (template_source_.find("tool_calls") != std::string::npos),
++      .supports_system_role = (template_source_.find("system") != std::string::npos),
++      .supports_parallel_tool_calls = false,
++      .supports_tool_call_id = (template_source_.find("tool_call_id") != std::string::npos),
++      .requires_typed_content = false,
++      .supports_single_turn = (template_source_.find("is_appending_to_prefill") != std::string::npos)};
+ }
+ 
+ PromptTemplate::PromptTemplate(const PromptTemplate& other)
+-    : minijinja_template_(other.minijinja_template_->clone_template()) {
++    : template_source_(other.template_source_) {
+   capabilities_ = other.capabilities_;
+ }
+ 
+ PromptTemplate& PromptTemplate::operator=(const PromptTemplate& other) {
+-  minijinja_template_ = other.minijinja_template_->clone_template();
++  template_source_ = other.template_source_;
+   capabilities_ = other.capabilities_;
+   return *this;
+ }
+ 
+ PromptTemplate::PromptTemplate(PromptTemplate&& other)
+-    : minijinja_template_(std::move(other.minijinja_template_)) {
++    : template_source_(std::move(other.template_source_)) {
+   capabilities_ = other.capabilities_;
+ }
+ 
+ PromptTemplate& PromptTemplate::operator=(PromptTemplate&& other) {
+-  minijinja_template_ = std::move(other.minijinja_template_);
++  template_source_ = std::move(other.template_source_);
+   capabilities_ = other.capabilities_;
+   return *this;
+ }
+ 
+ absl::StatusOr<std::string> PromptTemplate::Apply(
+     const PromptTemplateInput& input) const {
+-  nlohmann::ordered_json minijinja_inputs;
+-  minijinja_inputs["messages"] = input.messages;
+-  minijinja_inputs["tools"] = input.tools;
+-  minijinja_inputs["add_generation_prompt"] = input.add_generation_prompt;
+-  minijinja_inputs["extra_context"] = input.extra_context;
+-  minijinja_inputs["now"] = absl::ToUnixSeconds(input.now);
+-  minijinja_inputs["bos_token"] = input.bos_token;
+-  minijinja_inputs["eos_token"] = input.eos_token;
+-  auto result = minijinja_template_->apply(minijinja_inputs.dump());
+-  if (!result.is_ok) {
+-    return absl::InternalError(
+-        absl::StrCat("Failed to apply template: ", std::string(result.error)));
+-  }
+-  return std::string(result.content);
++  // Use simple message formatting since Minijinja is not available
++  std::string bos = input.bos_token.empty() ? "" : input.bos_token;
++  std::string eos = input.eos_token.empty() ? "" : input.eos_token;
++  return SimpleFormatMessages(input.messages, bos, eos,
++                             input.add_generation_prompt);
+ }
+ 
+ absl::string_view PromptTemplate::GetTemplateSource() const {
+-  auto source = minijinja_template_->source();
+-  return absl::string_view(source.data(), source.size());
++  return absl::string_view(template_source_);
+ }
+ 
+ }  // namespace litert::lm
+diff --git a/runtime/components/prompt_template.h b/runtime/components/prompt_template.h
+index ea17f68..96d2888 100644
+--- a/runtime/components/prompt_template.h
++++ b/runtime/components/prompt_template.h
+@@ -22,7 +22,7 @@
+ #include "absl/time/clock.h"  // from @com_google_absl
+ #include "absl/time/time.h"  // from @com_google_absl
+ #include "nlohmann/json.hpp"  // from @nlohmann_json
+-#include "runtime/components/rust/minijinja_template.rs.h"
++// minijinja_template.rs.h is not needed - we use a simplified template instead
+ 
+ namespace litert::lm {
+ 
+@@ -153,7 +153,7 @@ class PromptTemplate {
+   }
+ 
+  private:
+-  rust::Box<MinijinjaTemplate> minijinja_template_;
++  std::string template_source_;
+ 
+   // The capabilities of the prompt template. Auto inferred from the template
+   // source string.
+diff --git a/runtime/core/engine_impl.cc b/runtime/core/engine_impl.cc
+index fa2bdff..e180b2b 100644
+--- a/runtime/core/engine_impl.cc
++++ b/runtime/core/engine_impl.cc
+@@ -397,11 +397,22 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineImpl::Create(
+   return llm_impl;
+ };
+ 
+-LITERT_LM_REGISTER_ENGINE(EngineFactory::EngineType::kLiteRTCompiledModel,
+-                          [](EngineSettings settings,
+-                             absl::string_view input_prompt_as_hint) {
+-                            return EngineImpl::Create(std::move(settings),
+-                                                      input_prompt_as_hint);
+-                          });
+ }  // namespace
++
++// Registration MUST be outside the anonymous namespace so ForceLinkEngineImpl
++// can reference it and prevent the linker from stripping it on iOS.
++static const ::litert::lm::EngineRegisterer kEngineRegisterer(
++    EngineFactory::EngineType::kLiteRTCompiledModel,
++    [](EngineSettings settings,
++       absl::string_view input_prompt_as_hint) {
++      return EngineImpl::Create(std::move(settings),
++                                input_prompt_as_hint);
++    });
++
+ }  // namespace litert::lm
++
++extern "C" void ForceLinkEngineImpl() {
++  // Reference the static registerer so the linker cannot strip it.
++  volatile const void* p = &litert::lm::kEngineRegisterer;
++  (void)p;
++}
+diff --git a/runtime/util/memory_mapped_file_posix.cc b/runtime/util/memory_mapped_file_posix.cc
+index f04cdb0..703a640 100644
+--- a/runtime/util/memory_mapped_file_posix.cc
++++ b/runtime/util/memory_mapped_file_posix.cc
+@@ -110,7 +110,7 @@ absl::StatusOr<std::unique_ptr<MemoryMappedFile>> MemoryMappedFile::Create(
+   }
+ 
+   void* data =
+-      mmap(nullptr, length, PROT_READ | PROT_WRITE, MAP_PRIVATE, file, offset);
++      mmap(nullptr, length, PROT_READ, MAP_PRIVATE, file, offset);
+   RET_CHECK_NE(data, MAP_FAILED) << "Failed to map, error: " << strerror(errno);
+   RET_CHECK_NE(data, nullptr) << "Failed to map.";
+ #ifdef __APPLE__

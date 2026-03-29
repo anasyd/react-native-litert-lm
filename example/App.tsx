@@ -8,6 +8,7 @@ import {
   Platform,
   ActivityIndicator,
   TextInput,
+  Image,
 } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import {
@@ -20,14 +21,31 @@ import {
   type ChatMessage,
 } from "react-native-litert-lm";
 
-// Test asset paths — platform-aware
-const TEST_IMAGE_PATH = Platform.select({
-  ios: `${(global as any).__DOCUMENTS_PATH ?? '/tmp'}/test.jpeg`,
-  android: '/data/local/tmp/test.jpeg',
-  default: '/tmp/test.jpeg',
-})!;
+// Test asset paths — resolved at runtime from bundled assets
+// On iOS, Metro bundles images into the app; resolveAssetSource gives us a URI.
+// On Android, the file must be pre-pushed to the device.
+const TEST_IMAGE_ASSET = require('./test.jpeg');
+
+async function getTestImagePath(modelInstance?: any): Promise<string> {
+  if (Platform.OS === 'android') {
+    return '/data/local/tmp/test.jpeg';
+  }
+  // iOS: resolveAssetSource returns a file:// URI for local assets in prod,
+  // but an HTTP URL in dev mode (Metro-served)
+  const source = Image.resolveAssetSource(TEST_IMAGE_ASSET);
+  if (source.uri.startsWith('file://')) {
+    return source.uri.replace('file://', '');
+  }
+  // Dev mode: Metro serves via HTTP — use the model's download helper 
+  // to fetch it to a local cache file
+  if (modelInstance?.downloadModel) {
+    return await modelInstance.downloadModel(source.uri, 'test_image.jpeg');
+  }
+  throw new Error('Cannot resolve test image path in dev mode without model instance');
+}
+
 const TEST_AUDIO_PATH = Platform.select({
-  ios: `${(global as any).__DOCUMENTS_PATH ?? '/tmp'}/test.wav`,
+  ios: '/tmp/test.wav', // Audio test not yet supported on iOS
   android: '/data/local/tmp/test.wav',
   default: '/tmp/test.wav',
 })!;
@@ -228,24 +246,29 @@ function Main() {
         log("Memory tracking disabled", "info");
       }
 
-      // Test 11: Image
-      const mmCheck = checkMultimodalSupport();
-      if (!mmCheck) {
+      // Test 11: Image (vision works on iOS, audio doesn't)
+      // Note: Vision executor needs ~2GB additional memory on top of the text model.
+      // Skip if insufficient memory to avoid jetsam kills.
+      const memBeforeImage = model.getMemoryUsage();
+      const availGB = memBeforeImage.availableMemoryBytes / (1024 * 1024 * 1024);
+      if (availGB < 4.0) {
+        log(`Image skipped: only ${availGB.toFixed(1)} GB available (need ~4 GB for vision encoder)`, "info");
+      } else {
         try {
+          const imagePath = await getTestImagePath(model);
+          log(`Image path: ${imagePath}`);
           const imgResp = await model.sendMessageWithImage(
-            "Describe this image.",
-            TEST_IMAGE_PATH,
+            "Describe this image in one sentence.",
+            imagePath,
           );
           log(`Image: "${imgResp}"`, "success");
         } catch (e: any) {
           log(`Image test: ${e.message}`, "error");
         }
-      } else {
-        log(`Image skipped: ${mmCheck}`, "info");
       }
 
-      // Test 12: Audio
-      if (!mmCheck) {
+      // Test 12: Audio (not supported on iOS yet)
+      if (Platform.OS !== 'ios') {
         try {
           const audioResp = await model.sendMessageWithAudio(
             "Transcribe this audio.",
@@ -256,7 +279,7 @@ function Main() {
           log(`Audio test: ${e.message}`, "error");
         }
       } else {
-        log("Audio skipped (not supported)", "info");
+        log("Audio skipped (not supported on iOS)", "info");
       }
 
       log("All tests complete.", "success");

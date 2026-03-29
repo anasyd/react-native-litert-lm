@@ -57,6 +57,25 @@ fi
 
 LITERT_SRC="$BUILD_DIR/LiteRT-LM"
 
+# ---- 1b. Apply iOS-specific patches ---------------------------------------
+# These patches fix:
+# - mmap PROT_WRITE removal (iOS rejects CoW for large files)
+# - Error capture API (litert_lm_get_last_error)
+# - Engine registerer moved outside anonymous namespace (iOS linker stripping)
+# - Minijinja/Rust stub replacement (custom C++ prompt template)
+PATCHES_DIR="$PROJECT_ROOT/scripts/patches"
+if [ -d "$PATCHES_DIR" ]; then
+  for PATCH_FILE in "$PATCHES_DIR"/*.patch; do
+    if [ -f "$PATCH_FILE" ]; then
+      echo "   Applying patch: $(basename "$PATCH_FILE")..."
+      cd "$LITERT_SRC"
+      git apply --check "$PATCH_FILE" 2>/dev/null && \
+        git apply "$PATCH_FILE" || \
+        echo "   (patch already applied or conflicts, skipping)"
+    fi
+  done
+fi
+
 # ---- 2. Verify Bazel is available -----------------------------------------
 echo ""
 echo "==> Step 2: Checking Bazel..."

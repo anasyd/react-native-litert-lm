@@ -232,11 +232,18 @@ LITERT_LM_C_API_EXPORT
 void litert_lm_engine_settings_set_num_decode_tokens(
     LiteRtLmEngineSettings* settings, int num_decode_tokens);
 
+// Returns the last error message from a failed C API call.
+// Returns an empty string if no error has occurred.
+// The returned pointer is valid until the next C API call on the same thread.
+LITERT_LM_C_API_EXPORT
+const char* litert_lm_get_last_error();
+
 // Creates a LiteRT LM Engine from the given settings. The caller is responsible
 // for destroying the engine using `litert_lm_engine_delete`.
 //
 // @param settings The engine settings.
 // @return A pointer to the created engine, or NULL on failure.
+//         Call litert_lm_get_last_error() for details on failure.
 LITERT_LM_C_API_EXPORT
 LiteRtLmEngine* litert_lm_engine_create(const LiteRtLmEngineSettings* settings);
 

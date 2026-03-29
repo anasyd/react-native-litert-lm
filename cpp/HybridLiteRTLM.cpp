@@ -18,6 +18,8 @@
 #include <chrono>
 #include <stdexcept>
 #include <sstream>
+#include <sys/stat.h>
+#include <cstdio>
 
 #ifdef __APPLE__
 #include "IOSDownloadHelper.h"
@@ -241,7 +243,7 @@ void HybridLiteRTLM::loadModelInternal(
       modelPath.c_str(),
       backend,
       visionBackend,
-      "cpu" // audio always on CPU
+      nullptr // audio executor not supported on iOS yet
     );
     if (!settings) {
       return false;
@@ -249,6 +251,10 @@ void HybridLiteRTLM::loadModelInternal(
     
     litert_lm_engine_settings_set_max_num_tokens(settings, static_cast<int>(maxTokens_));
     litert_lm_engine_settings_enable_benchmark(settings);
+    
+    // Set cache directory to the same directory as the model file
+    std::string cacheDir = modelPath.substr(0, modelPath.find_last_of('/'));
+    litert_lm_engine_settings_set_cache_dir(settings, cacheDir.c_str());
     
     engine_ = litert_lm_engine_create(settings);
     litert_lm_engine_settings_delete(settings);
@@ -275,9 +281,32 @@ void HybridLiteRTLM::loadModelInternal(
   }
   
   if (!engine_) {
+    // Collect diagnostic info
+    std::string diag = " | Diagnostics: ";
+    struct stat st;
+    if (stat(modelPath.c_str(), &st) == 0) {
+      diag += "File size: " + std::to_string(st.st_size) + " bytes";
+    } else {
+      diag += "Failed to stat file (errno: " + std::to_string(errno) + ")";
+    }
+    
+    FILE* f = fopen(modelPath.c_str(), "rb");
+    if (f) {
+      diag += ", Readable: YES";
+      fclose(f);
+    } else {
+      diag += ", Readable: NO (errno: " + std::to_string(errno) + ")";
+    }
+    
+    // Get the native error from the C API
+    const char* nativeErr = litert_lm_get_last_error();
+    if (nativeErr && nativeErr[0] != '\0') {
+      diag += " | Native error: " + std::string(nativeErr);
+    }
+
     throw std::runtime_error(
       "Failed to create LiteRT-LM engine. Tried backend '" +
-      std::string(primaryBackend) + "' and CPU fallback. Model path: " + modelPath);
+      std::string(primaryBackend) + "' and CPU fallback. Model path: " + modelPath + diag);
   }
   
   session_config_ = litert_lm_session_config_create();
@@ -484,7 +513,12 @@ std::string HybridLiteRTLM::sendMessageWithImageInternal(
     conversation_, msgJson.c_str(), nullptr);
   
   if (!response) {
-    throw std::runtime_error("LiteRT-LM: sendMessageWithImage failed");
+    std::string errMsg = "LiteRT-LM: sendMessageWithImage failed";
+    const char* nativeErr = litert_lm_get_last_error();
+    if (nativeErr && nativeErr[0] != '\0') {
+      errMsg += ": " + std::string(nativeErr);
+    }
+    throw std::runtime_error(errMsg);
   }
   
   const char* responseStr = litert_lm_json_response_get_string(response);
