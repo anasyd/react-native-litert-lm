@@ -1,0 +1,48 @@
+name: Build iOS Framework
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build LiteRT-LM XCFramework
+    runs-on: macos-15
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Bazelisk
+        run: brew install bazelisk
+
+      - name: Build iOS XCFramework
+        run: |
+          chmod +x scripts/build-ios-engine.sh
+          ./scripts/build-ios-engine.sh
+
+      - name: Verify output
+        run: |
+          ls -la ios/Frameworks/LiteRTLM.xcframework/
+          ls -la LiteRTLM-ios-frameworks.zip
+          echo "Size: $(du -h LiteRTLM-ios-frameworks.zip | cut -f1)"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LiteRTLM-ios-frameworks
+          path: LiteRTLM-ios-frameworks.zip
+
+      - name: Upload to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: LiteRTLM-ios-frameworks.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
