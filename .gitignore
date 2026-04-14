@@ -2,7 +2,6 @@
 node_modules/
 
 # Build outputs
-lib/
 build/
 *.tsbuildinfo
 
@@ -15,8 +14,7 @@ ios/build/
 ios/Pods/
 *.xcworkspace
 
-# Nitrogen generated (can be regenerated)
-nitrogen/generated/
+# Nitrogen generated — kept in repo for GitHub installs
 
 # IDE
 .idea/
