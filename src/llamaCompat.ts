@@ -14,6 +14,41 @@
 import { NitroModules } from 'react-native-nitro-modules'
 import type { LiteRTLM } from './specs/LiteRTLM.nitro'
 
+/**
+ * Extract plain text from LiteRT-LM streaming JSON chunks.
+ * The C API returns fragments like:
+ *   {"role":"assistant","content":[{"type":"text","text":"Hello"}]}
+ * We accumulate a JSON buffer and try to extract text values.
+ */
+function extractTextFromChunk(chunk: string, buffer: string): { text: string; buffer: string } {
+  // If the chunk looks like plain text (no JSON structure), return as-is
+  if (!chunk.includes('"role"') && !chunk.includes('"type"') && !chunk.includes('"text"')) {
+    return { text: chunk, buffer: '' }
+  }
+
+  // Accumulate JSON fragments
+  buffer += chunk
+
+  // Try to extract "text":"..." values from complete JSON objects
+  let extracted = ''
+  const textPattern = /"text"\s*:\s*"((?:[^"\\]|\\.)*)"/g
+  let match
+  while ((match = textPattern.exec(buffer)) !== null) {
+    const val = match[1]
+    // Skip structural values like "text" as a type identifier
+    if (val !== 'text' && val !== 'assistant' && val !== 'model') {
+      extracted += val.replace(/\\n/g, '\n').replace(/\\"/g, '"')
+    }
+  }
+
+  // If we found complete JSON objects, clear the buffer
+  if (buffer.includes('}]}')) {
+    buffer = ''
+  }
+
+  return { text: extracted, buffer }
+}
+
 interface CompletionMessage {
   role: 'user' | 'assistant' | 'system'
   content: string
@@ -92,8 +127,11 @@ export async function initLiteRTAsLlama(params: {
       const historyJson = JSON.stringify(historyForApi)
 
       // Call the native completionWithMessages
+      // The C API streams JSON chunks like {"role":"assistant","content":[{"type":"text","text":"H"}]}
+      // We need to extract just the text portion and accumulate it
       return new Promise<CompletionResult>((resolve, reject) => {
         let fullText = ''
+        let jsonBuffer = ''
         try {
           native.completionWithMessages(
             systemPrompt,
@@ -101,9 +139,14 @@ export async function initLiteRTAsLlama(params: {
             lastMsg.content,
             (token: string, done: boolean) => {
               if (token) {
-                fullText += token
-                if (onToken) {
-                  onToken({ token })
+                // Try to extract text from JSON chunk
+                const extracted = extractTextFromChunk(token, jsonBuffer)
+                jsonBuffer = extracted.buffer
+                if (extracted.text) {
+                  fullText += extracted.text
+                  if (onToken) {
+                    onToken({ token: extracted.text })
+                  }
                 }
               }
               if (done) {
