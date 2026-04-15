@@ -565,6 +565,71 @@ void HybridLiteRTLM::sendMessageAsync(
 }
 
 // =============================================================================
+// completionStreamCallback — Stops generation on <end_of_turn>
+// =============================================================================
+
+void HybridLiteRTLM::completionStreamCallback(void* callback_data, const char* chunk,
+                                                bool is_final, const char* error_msg) {
+  auto* ctx = static_cast<StreamContext*>(callback_data);
+
+  if (ctx->stopped) {
+    if (is_final) delete ctx;
+    return;
+  }
+
+  if (error_msg) {
+    ctx->onToken(std::string("Error: ") + error_msg, true);
+    delete ctx;
+    return;
+  }
+
+  if (is_final) {
+    {
+      std::lock_guard<std::mutex> lock(*ctx->historyMutex);
+      ctx->history->push_back(Message{Role::USER, ctx->userMessage});
+      ctx->history->push_back(Message{Role::MODEL, ctx->fullResponse});
+    }
+    ctx->onToken("", true);
+    delete ctx;
+    return;
+  }
+
+  if (chunk) {
+    std::string token(chunk);
+
+    // Check for end_of_turn BEFORE stripping — this means the model is done
+    if (token.find("<end_of_turn>") != std::string::npos || token.find("<eos>") != std::string::npos) {
+      // Strip the marker, send any remaining text, then signal done
+      std::string cleaned = stripControlTokens(token);
+      if (!cleaned.empty()) {
+        ctx->fullResponse += cleaned;
+        ctx->onToken(cleaned, false);
+      }
+      // Cancel further generation
+      ctx->stopped = true;
+      if (ctx->conversation) {
+        litert_lm_conversation_cancel_process(static_cast<LiteRtLmConversation*>(ctx->conversation));
+      }
+      {
+        std::lock_guard<std::mutex> lock(*ctx->historyMutex);
+        ctx->history->push_back(Message{Role::USER, ctx->userMessage});
+        ctx->history->push_back(Message{Role::MODEL, ctx->fullResponse});
+      }
+      ctx->onToken("", true);
+      // Don't delete ctx here — the final callback from C engine will do it
+      return;
+    }
+
+    std::string cleaned = stripControlTokens(token);
+    ctx->fullResponse += cleaned;
+    ctx->tokenCount++;
+    if (!cleaned.empty()) {
+      ctx->onToken(cleaned, false);
+    }
+  }
+}
+
+// =============================================================================
 // completionWithMessages — Stateless completion with full messages array
 // =============================================================================
 
@@ -642,12 +707,15 @@ void HybridLiteRTLM::completionWithMessages(
   ctxOwner->startTime = std::chrono::steady_clock::now();
   ctxOwner->tokenCount = 0;
 
+  // Store conversation pointer in context so callback can cancel it
+  ctxOwner->conversation = conversation_;
+
   StreamContext* ctx = ctxOwner.release();
 
   runOnLargeStack([&]() {
     int result = litert_lm_conversation_send_message_stream(
       conversation_, msgJson.c_str(), nullptr,
-      streamCallbackFn, ctx);
+      completionStreamCallback, ctx);
 
     if (result != 0) {
       delete ctx;

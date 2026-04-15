@@ -154,6 +154,10 @@ private:
   std::string sendMessageWithImageInternal(const std::string& message, const std::string& imagePath);
   std::string sendMessageWithAudioInternal(const std::string& message, const std::string& audioPath);
   
+  // Streaming callbacks (C function pointers)
+  static void streamCallbackFn(void* callback_data, const char* chunk, bool is_final, const char* error_msg);
+  static void completionStreamCallback(void* callback_data, const char* chunk, bool is_final, const char* error_msg);
+
   // Streaming callback context (must be a plain struct for C function pointer)
   struct StreamContext {
     std::function<void(const std::string&, bool)> onToken;
@@ -164,11 +168,10 @@ private:
     GenerationStats* lastStats;
     std::chrono::steady_clock::time_point startTime;
     int tokenCount;
+    void* conversation = nullptr;  // For completionWithMessages to cancel on <end_of_turn>
+    bool stopped = false;
   };
   
-  // Static C callback for streaming (no captures needed)
-  static void streamCallbackFn(void* callback_data, const char* chunk,
-                                bool is_final, const char* error_msg);
 };
 
 } // namespace margelo::nitro::litertlm
