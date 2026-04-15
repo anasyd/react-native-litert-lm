@@ -11,8 +11,8 @@
  *   await context.release()
  */
 
-import { createLLM } from './modelFactory'
-import type { LiteRTLMInstance } from './index'
+import { NitroModules } from 'react-native-nitro-modules'
+import type { LiteRTLM } from './specs/LiteRTLM.nitro'
 
 interface CompletionMessage {
   role: 'user' | 'assistant' | 'system'
@@ -49,11 +49,11 @@ export async function initLiteRTAsLlama(params: {
   n_gpu_layers?: number
   use_mlock?: boolean
 }): Promise<LlamaCompatContext> {
-  const llm = createLLM()
+  const native = NitroModules.createHybridObject<LiteRTLM>('LiteRTLM')
 
   const backend = (params.n_gpu_layers ?? 0) > 0 ? 'gpu' as const : 'cpu' as const
 
-  await llm.loadModel(params.model, {
+  await native.loadModel(params.model, {
     backend,
     contextLength: params.n_ctx ?? 4096,
     maxTokens: 512,
@@ -95,7 +95,7 @@ export async function initLiteRTAsLlama(params: {
       return new Promise<CompletionResult>((resolve, reject) => {
         let fullText = ''
         try {
-          ;(llm as any).completionWithMessages(
+          native.completionWithMessages(
             systemPrompt,
             historyJson,
             lastMsg.content,
@@ -118,7 +118,7 @@ export async function initLiteRTAsLlama(params: {
     },
 
     async release(): Promise<void> {
-      llm.close()
+      native.close()
     },
   }
 }
