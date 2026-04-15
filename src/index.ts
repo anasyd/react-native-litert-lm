@@ -39,6 +39,10 @@ export { createMemoryTracker, createNativeBuffer } from "./memoryTracker";
 export type { LiteRTLMInstance } from "./modelFactory";
 export * from "./hooks";
 
+// llama.rn compatibility layer
+export { initLiteRTAsLlama } from "./llamaCompat";
+export type { LlamaCompatContext } from "./llamaCompat";
+
 /**
  * Creates a new LiteRT-LM inference engine instance.
  *

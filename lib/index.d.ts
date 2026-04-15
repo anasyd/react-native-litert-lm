@@ -6,6 +6,8 @@ export type { MemorySnapshot, MemoryTracker, MemoryTrackerSummary, } from "./mem
 export { createMemoryTracker, createNativeBuffer } from "./memoryTracker";
 export type { LiteRTLMInstance } from "./modelFactory";
 export * from "./hooks";
+export { initLiteRTAsLlama } from "./llamaCompat";
+export type { LlamaCompatContext } from "./llamaCompat";
 /**
  * Creates a new LiteRT-LM inference engine instance.
  *
