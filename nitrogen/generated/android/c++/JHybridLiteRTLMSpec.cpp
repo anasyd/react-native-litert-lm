@@ -174,6 +174,10 @@ namespace margelo::nitro::litertlm {
     static const auto method = _javaPart->javaClassStatic()->getMethod<void(jni::alias_ref<jni::JString> /* message */, jni::alias_ref<JFunc_void_std__string_bool::javaobject> /* onToken */)>("sendMessageAsync_cxx");
     method(_javaPart, jni::make_jstring(message), JFunc_void_std__string_bool_cxx::fromCpp(onToken));
   }
+  void JHybridLiteRTLMSpec::completionWithMessages(const std::string& systemPrompt, const std::string& historyJson, const std::string& lastUserMessage, const std::function<void(const std::string& /* token */, bool /* done */)>& onToken) {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<void(jni::alias_ref<jni::JString> /* systemPrompt */, jni::alias_ref<jni::JString> /* historyJson */, jni::alias_ref<jni::JString> /* lastUserMessage */, jni::alias_ref<JFunc_void_std__string_bool::javaobject> /* onToken */)>("completionWithMessages_cxx");
+    method(_javaPart, jni::make_jstring(systemPrompt), jni::make_jstring(historyJson), jni::make_jstring(lastUserMessage), JFunc_void_std__string_bool_cxx::fromCpp(onToken));
+  }
   std::vector<Message> JHybridLiteRTLMSpec::getHistory() {
     static const auto method = _javaPart->javaClassStatic()->getMethod<jni::local_ref<jni::JArrayClass<JMessage>>()>("getHistory");
     auto __result = method(_javaPart);

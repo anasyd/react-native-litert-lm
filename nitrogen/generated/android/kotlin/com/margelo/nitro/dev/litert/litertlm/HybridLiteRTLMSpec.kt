@@ -67,6 +67,15 @@ abstract class HybridLiteRTLMSpec: HybridObject() {
     return __result
   }
   
+  abstract fun completionWithMessages(systemPrompt: String, historyJson: String, lastUserMessage: String, onToken: (token: String, done: Boolean) -> Unit): Unit
+  
+  @DoNotStrip
+  @Keep
+  private fun completionWithMessages_cxx(systemPrompt: String, historyJson: String, lastUserMessage: String, onToken: Func_void_std__string_bool): Unit {
+    val __result = completionWithMessages(systemPrompt, historyJson, lastUserMessage, onToken)
+    return __result
+  }
+  
   @DoNotStrip
   @Keep
   abstract fun getHistory(): Array<Message>

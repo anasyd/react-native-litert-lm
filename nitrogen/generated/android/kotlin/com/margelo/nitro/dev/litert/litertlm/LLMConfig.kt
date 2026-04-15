@@ -28,6 +28,9 @@ data class LLMConfig(
   val maxTokens: Double?,
   @DoNotStrip
   @Keep
+  val contextLength: Double?,
+  @DoNotStrip
+  @Keep
   val temperature: Double?,
   @DoNotStrip
   @Keep
@@ -46,8 +49,8 @@ data class LLMConfig(
     @Keep
     @Suppress("unused")
     @JvmStatic
-    private fun fromCpp(systemPrompt: String?, backend: Backend?, maxTokens: Double?, temperature: Double?, topK: Double?, topP: Double?): LLMConfig {
-      return LLMConfig(systemPrompt, backend, maxTokens, temperature, topK, topP)
+    private fun fromCpp(systemPrompt: String?, backend: Backend?, maxTokens: Double?, contextLength: Double?, temperature: Double?, topK: Double?, topP: Double?): LLMConfig {
+      return LLMConfig(systemPrompt, backend, maxTokens, contextLength, temperature, topK, topP)
     }
   }
 }

@@ -61,6 +61,7 @@ namespace margelo::nitro::litertlm {
     std::shared_ptr<Promise<void>> deleteModel(const std::string& fileName) override;
     std::shared_ptr<Promise<std::string>> sendMessageWithAudio(const std::string& message, const std::string& audioPath) override;
     void sendMessageAsync(const std::string& message, const std::function<void(const std::string& /* token */, bool /* done */)>& onToken) override;
+    void completionWithMessages(const std::string& systemPrompt, const std::string& historyJson, const std::string& lastUserMessage, const std::function<void(const std::string& /* token */, bool /* done */)>& onToken) override;
     std::vector<Message> getHistory() override;
     void resetConversation() override;
     bool isReady() override;

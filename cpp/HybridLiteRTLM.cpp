@@ -290,6 +290,9 @@ void HybridLiteRTLM::loadModelInternal(
     if (config->maxTokens.has_value()) {
       maxTokens_ = config->maxTokens.value();
     }
+    if (config->contextLength.has_value()) {
+      contextLength_ = config->contextLength.value();
+    }
     if (config->systemPrompt.has_value()) {
       systemPrompt_ = config->systemPrompt.value();
     }
@@ -318,7 +321,7 @@ void HybridLiteRTLM::loadModelInternal(
       return false;
     }
     
-    litert_lm_engine_settings_set_max_num_tokens(settings, static_cast<int>(maxTokens_));
+    litert_lm_engine_settings_set_max_num_tokens(settings, static_cast<int>(contextLength_));
     litert_lm_engine_settings_enable_benchmark(settings);
     
     // Set cache directory to the same directory as the model file
@@ -558,6 +561,100 @@ void HybridLiteRTLM::sendMessageAsync(
   // Non-Apple stub
   ctxOwner->onToken("[iOS only] Streaming not available on this platform.", true);
   // ctxOwner auto-deleted by unique_ptr
+#endif
+}
+
+// =============================================================================
+// completionWithMessages — Stateless completion with full messages array
+// =============================================================================
+
+void HybridLiteRTLM::completionWithMessages(
+    const std::string& systemPrompt,
+    const std::string& historyJson,
+    const std::string& lastUserMessage,
+    const std::function<void(const std::string&, bool)>& onToken) {
+
+  auto onTokenCopy = onToken;
+  auto lastMsgCopy = lastUserMessage;
+
+#ifdef __APPLE__
+  ensureLoaded();
+
+  // 1. Clean up existing conversation
+  if (conversation_) {
+    litert_lm_conversation_delete(conversation_);
+    conversation_ = nullptr;
+  }
+  if (conv_config_) {
+    litert_lm_conversation_config_delete(conv_config_);
+    conv_config_ = nullptr;
+  }
+
+  // 2. Build system message JSON
+  const char* systemMsgPtr = nullptr;
+  std::string systemMsgJson;
+  if (!systemPrompt.empty()) {
+    systemMsgJson = "{\"role\":\"system\",\"content\":\"" + escapeJson(systemPrompt) + "\"}";
+    systemMsgPtr = systemMsgJson.c_str();
+  }
+
+  // 3. Pass history JSON directly (already formatted as JSON array by TypeScript)
+  const char* historyPtr = nullptr;
+  if (!historyJson.empty() && historyJson != "[]") {
+    historyPtr = historyJson.c_str();
+  }
+
+  // 4. Create conversation with system prompt and pre-loaded history
+  conv_config_ = litert_lm_conversation_config_create(
+    engine_,
+    session_config_,
+    systemMsgPtr,
+    nullptr,       // tools
+    historyPtr,    // pre-loaded conversation history
+    false          // constrained decoding
+  );
+  if (!conv_config_) {
+    onTokenCopy("Error: Failed to create conversation config", true);
+    return;
+  }
+
+  conversation_ = litert_lm_conversation_create(engine_, conv_config_);
+  if (!conversation_) {
+    litert_lm_conversation_config_delete(conv_config_);
+    conv_config_ = nullptr;
+    onTokenCopy("Error: Failed to create conversation", true);
+    return;
+  }
+
+  // 5. Clear internal history (we manage state from TypeScript)
+  history_.clear();
+
+  // 6. Send the last user message via streaming
+  std::string msgJson = buildTextMessageJson(lastMsgCopy);
+
+  auto ctxOwner = std::make_unique<StreamContext>();
+  ctxOwner->onToken = std::move(onTokenCopy);
+  ctxOwner->fullResponse = "";
+  ctxOwner->history = &history_;
+  ctxOwner->historyMutex = &mutex_;
+  ctxOwner->userMessage = lastMsgCopy;
+  ctxOwner->lastStats = &lastStats_;
+  ctxOwner->startTime = std::chrono::steady_clock::now();
+  ctxOwner->tokenCount = 0;
+
+  StreamContext* ctx = ctxOwner.release();
+
+  runOnLargeStack([&]() {
+    int result = litert_lm_conversation_send_message_stream(
+      conversation_, msgJson.c_str(), nullptr,
+      streamCallbackFn, ctx);
+
+    if (result != 0) {
+      delete ctx;
+    }
+  });
+#else
+  onTokenCopy("[iOS only] completionWithMessages not available on this platform.", true);
 #endif
 }
 

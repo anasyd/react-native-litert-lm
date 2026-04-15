@@ -70,6 +70,7 @@ namespace margelo::nitro::litertlm {
       virtual std::shared_ptr<Promise<void>> deleteModel(const std::string& fileName) = 0;
       virtual std::shared_ptr<Promise<std::string>> sendMessageWithAudio(const std::string& message, const std::string& audioPath) = 0;
       virtual void sendMessageAsync(const std::string& message, const std::function<void(const std::string& /* token */, bool /* done */)>& onToken) = 0;
+      virtual void completionWithMessages(const std::string& systemPrompt, const std::string& historyJson, const std::string& lastUserMessage, const std::function<void(const std::string& /* token */, bool /* done */)>& onToken) = 0;
       virtual std::vector<Message> getHistory() = 0;
       virtual void resetConversation() = 0;
       virtual bool isReady() = 0;

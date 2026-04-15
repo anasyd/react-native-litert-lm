@@ -45,13 +45,14 @@ namespace margelo::nitro::litertlm {
     std::optional<std::string> systemPrompt     SWIFT_PRIVATE;
     std::optional<Backend> backend     SWIFT_PRIVATE;
     std::optional<double> maxTokens     SWIFT_PRIVATE;
+    std::optional<double> contextLength     SWIFT_PRIVATE;
     std::optional<double> temperature     SWIFT_PRIVATE;
     std::optional<double> topK     SWIFT_PRIVATE;
     std::optional<double> topP     SWIFT_PRIVATE;
 
   public:
     LLMConfig() = default;
-    explicit LLMConfig(std::optional<std::string> systemPrompt, std::optional<Backend> backend, std::optional<double> maxTokens, std::optional<double> temperature, std::optional<double> topK, std::optional<double> topP): systemPrompt(systemPrompt), backend(backend), maxTokens(maxTokens), temperature(temperature), topK(topK), topP(topP) {}
+    explicit LLMConfig(std::optional<std::string> systemPrompt, std::optional<Backend> backend, std::optional<double> maxTokens, std::optional<double> contextLength, std::optional<double> temperature, std::optional<double> topK, std::optional<double> topP): systemPrompt(systemPrompt), backend(backend), maxTokens(maxTokens), contextLength(contextLength), temperature(temperature), topK(topK), topP(topP) {}
 
   public:
     friend bool operator==(const LLMConfig& lhs, const LLMConfig& rhs) = default;
@@ -70,6 +71,7 @@ namespace margelo::nitro {
         JSIConverter<std::optional<std::string>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "systemPrompt"))),
         JSIConverter<std::optional<margelo::nitro::litertlm::Backend>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "backend"))),
         JSIConverter<std::optional<double>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "maxTokens"))),
+        JSIConverter<std::optional<double>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "contextLength"))),
         JSIConverter<std::optional<double>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "temperature"))),
         JSIConverter<std::optional<double>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "topK"))),
         JSIConverter<std::optional<double>>::fromJSI(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "topP")))
@@ -80,6 +82,7 @@ namespace margelo::nitro {
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "systemPrompt"), JSIConverter<std::optional<std::string>>::toJSI(runtime, arg.systemPrompt));
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "backend"), JSIConverter<std::optional<margelo::nitro::litertlm::Backend>>::toJSI(runtime, arg.backend));
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "maxTokens"), JSIConverter<std::optional<double>>::toJSI(runtime, arg.maxTokens));
+      obj.setProperty(runtime, PropNameIDCache::get(runtime, "contextLength"), JSIConverter<std::optional<double>>::toJSI(runtime, arg.contextLength));
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "temperature"), JSIConverter<std::optional<double>>::toJSI(runtime, arg.temperature));
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "topK"), JSIConverter<std::optional<double>>::toJSI(runtime, arg.topK));
       obj.setProperty(runtime, PropNameIDCache::get(runtime, "topP"), JSIConverter<std::optional<double>>::toJSI(runtime, arg.topP));
@@ -96,6 +99,7 @@ namespace margelo::nitro {
       if (!JSIConverter<std::optional<std::string>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "systemPrompt")))) return false;
       if (!JSIConverter<std::optional<margelo::nitro::litertlm::Backend>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "backend")))) return false;
       if (!JSIConverter<std::optional<double>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "maxTokens")))) return false;
+      if (!JSIConverter<std::optional<double>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "contextLength")))) return false;
       if (!JSIConverter<std::optional<double>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "temperature")))) return false;
       if (!JSIConverter<std::optional<double>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "topK")))) return false;
       if (!JSIConverter<std::optional<double>>::canConvert(runtime, obj.getProperty(runtime, PropNameIDCache::get(runtime, "topP")))) return false;

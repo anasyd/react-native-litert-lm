@@ -40,6 +40,8 @@ namespace margelo::nitro::litertlm {
       jni::local_ref<JBackend> backend = this->getFieldValue(fieldBackend);
       static const auto fieldMaxTokens = clazz->getField<jni::JDouble>("maxTokens");
       jni::local_ref<jni::JDouble> maxTokens = this->getFieldValue(fieldMaxTokens);
+      static const auto fieldContextLength = clazz->getField<jni::JDouble>("contextLength");
+      jni::local_ref<jni::JDouble> contextLength = this->getFieldValue(fieldContextLength);
       static const auto fieldTemperature = clazz->getField<jni::JDouble>("temperature");
       jni::local_ref<jni::JDouble> temperature = this->getFieldValue(fieldTemperature);
       static const auto fieldTopK = clazz->getField<jni::JDouble>("topK");
@@ -50,6 +52,7 @@ namespace margelo::nitro::litertlm {
         systemPrompt != nullptr ? std::make_optional(systemPrompt->toStdString()) : std::nullopt,
         backend != nullptr ? std::make_optional(backend->toCpp()) : std::nullopt,
         maxTokens != nullptr ? std::make_optional(maxTokens->value()) : std::nullopt,
+        contextLength != nullptr ? std::make_optional(contextLength->value()) : std::nullopt,
         temperature != nullptr ? std::make_optional(temperature->value()) : std::nullopt,
         topK != nullptr ? std::make_optional(topK->value()) : std::nullopt,
         topP != nullptr ? std::make_optional(topP->value()) : std::nullopt
@@ -62,7 +65,7 @@ namespace margelo::nitro::litertlm {
      */
     [[maybe_unused]]
     static jni::local_ref<JLLMConfig::javaobject> fromCpp(const LLMConfig& value) {
-      using JSignature = JLLMConfig(jni::alias_ref<jni::JString>, jni::alias_ref<JBackend>, jni::alias_ref<jni::JDouble>, jni::alias_ref<jni::JDouble>, jni::alias_ref<jni::JDouble>, jni::alias_ref<jni::JDouble>);
+      using JSignature = JLLMConfig(jni::alias_ref<jni::JString>, jni::alias_ref<JBackend>, jni::alias_ref<jni::JDouble>, jni::alias_ref<jni::JDouble>, jni::alias_ref<jni::JDouble>, jni::alias_ref<jni::JDouble>, jni::alias_ref<jni::JDouble>);
       static const auto clazz = javaClassStatic();
       static const auto create = clazz->getStaticMethod<JSignature>("fromCpp");
       return create(
@@ -70,6 +73,7 @@ namespace margelo::nitro::litertlm {
         value.systemPrompt.has_value() ? jni::make_jstring(value.systemPrompt.value()) : nullptr,
         value.backend.has_value() ? JBackend::fromCpp(value.backend.value()) : nullptr,
         value.maxTokens.has_value() ? jni::JDouble::valueOf(value.maxTokens.value()) : nullptr,
+        value.contextLength.has_value() ? jni::JDouble::valueOf(value.contextLength.value()) : nullptr,
         value.temperature.has_value() ? jni::JDouble::valueOf(value.temperature.value()) : nullptr,
         value.topK.has_value() ? jni::JDouble::valueOf(value.topK.value()) : nullptr,
         value.topP.has_value() ? jni::JDouble::valueOf(value.topP.value()) : nullptr

@@ -46,10 +46,18 @@ export interface LLMConfig {
   backend?: Backend;
 
   /**
-   * Maximum number of tokens to generate.
-   * @default 1024
+   * Maximum number of tokens to generate per response.
+   * @default 512
    */
   maxTokens?: number;
+
+  /**
+   * Context window size (total tokens the engine can handle).
+   * This includes system prompt, conversation history, and output.
+   * Separate from maxTokens which only controls output length.
+   * @default 4096
+   */
+  contextLength?: number;
 
   /**
    * Sampling temperature (0.0 = deterministic, 1.0 = creative).
@@ -195,6 +203,26 @@ export interface LiteRTLM extends HybridObject<{
    */
   sendMessageAsync(
     message: string,
+    onToken: (token: string, done: boolean) => void,
+  ): void;
+
+  /**
+   * Stateless completion with full messages array support.
+   * Resets the conversation, applies system prompt and history,
+   * then generates a streaming response for the last user message.
+   *
+   * This enables llama.rn-compatible stateless inference where the
+   * caller provides the full context each time.
+   *
+   * @param systemPrompt The system prompt text.
+   * @param historyJson JSON array of prior messages: [{"role":"user","content":"..."},{"role":"model","content":"..."}]
+   * @param lastUserMessage The final user message to respond to.
+   * @param onToken Callback invoked for each token (token, isDone).
+   */
+  completionWithMessages(
+    systemPrompt: string,
+    historyJson: string,
+    lastUserMessage: string,
     onToken: (token: string, done: boolean) => void,
   ): void;
 

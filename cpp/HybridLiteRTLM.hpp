@@ -81,7 +81,14 @@ public:
     const std::string& message,
     const std::function<void(const std::string&, bool)>& onToken
   ) override;
-  
+
+  void completionWithMessages(
+    const std::string& systemPrompt,
+    const std::string& historyJson,
+    const std::string& lastUserMessage,
+    const std::function<void(const std::string&, bool)>& onToken
+  ) override;
+
   std::vector<Message> getHistory() override;
   
   void resetConversation() override;
@@ -121,7 +128,8 @@ private:
   double temperature_ = 0.7;
   double topK_ = 40.0;
   double topP_ = 0.95;
-  double maxTokens_ = 1024.0;
+  double maxTokens_ = 512.0;
+  double contextLength_ = 4096.0;
   
   // Helper to ensure model is loaded
   void ensureLoaded() const {
